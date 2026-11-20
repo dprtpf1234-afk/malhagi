@@ -1,7 +1,7 @@
 // 말하기 짝꿍 설정값. 배포 전에 GAS_URL만 바꾸면 됩니다.
 export const CONFIG = Object.freeze({
   // GAS 웹앱 배포 URL (…/exec). index.html의 CSP connect-src에도 같은 도메인이 허용되어 있어야 합니다.
-  GAS_URL: 'https://script.google.com/macros/s/REPLACE_WITH_DEPLOYMENT_ID/exec',
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbz2-77a7NNQlVV_p1_E5vTlb4Kezw7N6q80aPFAwECMaWYqSRpGyZTnv9ORsRj3JMyw/exec',
 
   // 복구 코드 → 열쇠 유도 (PBKDF2-SHA256). 바꾸면 기존 복구 코드가 모두 무효가 됩니다.
   PBKDF2_ITERATIONS: 600000,

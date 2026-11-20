@@ -1,6 +1,6 @@
 // 서비스 워커: 앱 화면 파일만 저장해 오프라인에서도 열리게 합니다.
 // GAS 요청(다른 도메인)은 건드리지 않습니다. 배포할 때마다 VERSION을 올려 주세요.
-const VERSION = 'v1.4.1';
+const VERSION = 'v1.4.2';
 const CACHE = `malhagi-${VERSION}`;
 const SHELL = [
   './',
