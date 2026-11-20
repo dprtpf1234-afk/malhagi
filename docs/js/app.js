@@ -39,17 +39,24 @@ const REST_AFTER_MS = 15 * 60 * 1000; // 15분 연속 연습하면 쉬기 권유
 
 // ───────────── 공통 화면 틀 ─────────────
 
-function speakGuide() {
-  return speech.speak(state.guide, { voiceName: state.settings.voiceName, rate: state.settings.rate });
+/** 기본 빠르기: 0.8~1.0 (v2.1부터. 더 느리면 음성 엔진이 소리를 늘어뜨려 발음이 뭉개짐) */
+function baseRate() {
+  const r = Number(state.settings.rate) || 1;
+  return Math.min(1, Math.max(0.8, r));
 }
 
-function speakWord(text, rate = state.settings.rate) {
+function speakGuide() {
+  return speech.speak(state.guide, { voiceName: state.settings.voiceName, rate: baseRate() });
+}
+
+function speakWord(text, rate = baseRate()) {
   return speech.speak(text, { voiceName: state.settings.voiceName, rate });
 }
 
 /** 천천히 듣기 빠르기: 설정한 빠르기의 70% (최소 0.5) */
 function slowRate() {
-  return Math.max(0.5, Math.round(state.settings.rate * 0.7 * 100) / 100);
+  // 0.6보다 느리면 음성 엔진이 소리를 늘어뜨려 발음이 뭉개지는 경우가 많아 0.6에서 멈춤
+  return Math.max(0.6, Math.round(baseRate() * 0.75 * 100) / 100);
 }
 
 // ── 전체화면 (PRD v2.0: 휴대폰에서 동작하지 않던 문제 수정) ──
@@ -118,7 +125,7 @@ function openFullscreenHelp() {
     h('ol', { class: 'steps' }, steps.map((t) => h('li', { text: t }))),
     extra,
   ]);
-  speech.speak(text, { voiceName: state.settings.voiceName, rate: state.settings.rate });
+  speech.speak(text, { voiceName: state.settings.voiceName, rate: baseRate() });
 }
 
 /** 아래에서 올라오는 창 (화면을 다시 그리지 않으므로 연습 중에도 안전) */
@@ -238,7 +245,7 @@ function openFontSizePanel(onClose) {
   document.body.append(overlay);
   document.addEventListener('keydown', onKey);
   title.focus();
-  speech.speak('읽기 편한 글씨 크기를 골라 주세요.', { voiceName: state.settings.voiceName, rate: state.settings.rate });
+  speech.speak('읽기 편한 글씨 크기를 골라 주세요.', { voiceName: state.settings.voiceName, rate: baseRate() });
 }
 
 /** 처음 설정의 첫 단계: 동의 화면을 읽기 전에 글씨 크기부터 고름 */
@@ -381,8 +388,21 @@ function screenConsent() {
   });
 }
 
-async function screenVoice({ fromSettings = false } = {}) {
-  const voices = await speech.getKoreanVoices();
+/** 더 좋은 한국어 목소리를 기기에 설치하는 방법 (기기마다 다름) */
+function voiceInstallSteps() {
+  const env = state.env;
+  if (env.isIOS) {
+    return ['아이폰 "설정" → "손쉬운 사용" → "읽기 및 말하기" → "음성"을 눌러요.', '"한국어"를 누르고 목소리를 골라 "향상된 음질" 또는 "프리미엄"을 내려받아요.', '이 화면으로 돌아와 "목소리 다시 찾기"를 눌러요.'];
+  }
+  if (env.isAndroid) {
+    return ['휴대폰 "설정"에서 "텍스트 음성 변환"(TTS)을 검색해 들어가요.', '기본 엔진을 "Google 음성 인식 및 합성"으로 고르고, 옆의 톱니(설정) → "음성 데이터 설치" → "한국어"를 눌러요.', '마음에 드는 목소리를 골라 내려받은 뒤, 이 화면으로 돌아와 "목소리 다시 찾기"를 눌러요.'];
+  }
+  return ['컴퓨터 설정에서 "음성"(Windows: 시간 및 언어 → 음성)을 열어요.', '"음성 추가"에서 한국어를 설치해요.', '브라우저를 다시 열고 "목소리 다시 찾기"를 눌러요.'];
+}
+
+async function screenVoice({ fromSettings = false, refresh = false } = {}) {
+  if (refresh) loading('목소리를 찾고 있어요');
+  const voices = await speech.getKoreanVoices({ refresh });
   const settings = state.settings;
   if (voices.length && !voices.some((v) => v.name === settings.voiceName)) settings.voiceName = voices[0].name;
 
@@ -391,43 +411,56 @@ async function screenVoice({ fromSettings = false } = {}) {
     if (fromSettings) { flushQuiet(); return screenSettings(); }
     return screenCreateKeys();
   };
+  const SAMPLE = '사과, 할머니, 물 좀 주세요';
 
-  const voiceList = h('div', { class: 'choices' });
+  const voiceList = h('div', { class: 'choices col', role: 'radiogroup', 'aria-label': '목소리' });
   const renderVoices = () => {
     clear(voiceList);
     voices.forEach((v, i) => {
       const selected = v.name === settings.voiceName;
       voiceList.append(h('button', {
-        type: 'button', class: `choice${selected ? ' selected' : ''}`, 'aria-pressed': String(selected),
-        onclick: async () => { settings.voiceName = v.name; renderVoices(); await speakWord('안녕하세요'); },
-      }, selected ? icon('check') : null, h('span', { text: `목소리 ${i + 1}` })));
+        type: 'button', role: 'radio', 'aria-checked': String(selected), class: `choice${selected ? ' selected' : ''}`,
+        onclick: async () => { settings.voiceName = v.name; renderVoices(); await speakWord(SAMPLE); },
+      }, h('span', {}, selected ? icon('check') : null, ` 목소리 ${i + 1}`), h('small', { text: speech.voiceLabel(v) })));
     });
   };
   renderVoices();
 
-  const rates = [[1.0, '보통'], [0.85, '조금 천천히'], [0.7, '천천히']];
+  const rates = [[1.0, '보통'], [0.9, '조금 천천히'], [0.8, '천천히']];
   const rateList = h('div', { class: 'choices' });
   const renderRates = () => {
     clear(rateList);
     rates.forEach(([r, label]) => {
-      const selected = settings.rate === r;
+      const selected = Math.abs(baseRate() - r) < 0.001;
       rateList.append(h('button', {
         type: 'button', class: `choice${selected ? ' selected' : ''}`, 'aria-pressed': String(selected),
-        onclick: async () => { settings.rate = r; renderRates(); await speakWord('안녕하세요', r); },
+        onclick: async () => { settings.rate = r; renderRates(); await speakWord(SAMPLE, r); },
       }, selected ? icon('check') : null, h('span', { text: label })));
     });
   };
   renderRates();
 
+  const tips = h('details', { class: 'tips' },
+    h('summary', { text: voices.length ? '발음이 어색하면: 더 좋은 목소리 설치하기' : '한국어 목소리 설치하기' }),
+    h('ol', { class: 'steps' }, voiceInstallSteps().map((t) => h('li', { text: t }))));
+  if (!voices.length) tips.open = true;
+
   screen({
-    guide: '듣기 편한 목소리와 빠르기를 골라 주세요. 버튼을 누르면 미리 들을 수 있어요.',
+    guide: voices.length
+      ? '듣기 편한 목소리와 빠르기를 골라 주세요. 버튼을 누르면 미리 들을 수 있어요. 발음이 어색하면 아래 안내대로 더 좋은 목소리를 설치해 보세요.'
+      : '이 기기에서 한국어 목소리를 찾지 못했어요. 아래 안내대로 한국어 목소리를 설치해 주세요.',
     title: '목소리 고르기',
     body: [
-      voices.length === 0
-        ? para('기기에 한국어 목소리가 없어요. 기기 설정의 "음성 출력(TTS)" 또는 "음성 콘텐츠"에서 한국어를 추가해 주세요.', 'warn')
-        : voices.length > 1 ? [h('h2', { text: '목소리' }), voiceList] : null,
+      h('h2', { text: '목소리' }),
+      voices.length
+        ? [para(voices.length === 1 ? '이 기기에서 쓸 수 있는 한국어 목소리는 1개예요.' : `한국어 목소리 ${voices.length}개 중에서 골라요. 누르면 들어 볼 수 있어요.`, 'small'), voiceList]
+        : para('이 기기에서 한국어 목소리를 찾지 못했어요.', 'warn'),
+      h('div', { class: 'row' },
+        button('들어 보기', () => speakWord(SAMPLE), { kind: 'secondary', iconName: 'speaker', disabled: !voices.length }),
+        button('목소리 다시 찾기', () => screenVoice({ fromSettings, refresh: true }), { kind: 'secondary', iconName: 'replay' })),
+      tips,
       h('h2', { text: '빠르기' }), rateList,
-      para("연습할 때 '천천히 듣기'를 누르면 이보다 더 천천히 들려줘요.", 'small'),
+      para("연습할 때 '천천히 듣기'를 누르면 이보다 조금 더 천천히 들려줘요.", 'small'),
     ],
     actions: [button(fromSettings ? '저장' : '다음', done)],
   });
@@ -679,7 +712,7 @@ function showRunItem(i) {
     if (slow) rec.slow++; else rec.plays++;
     upd();
     word.classList.add('speaking');
-    await speakWord(it.text, slow ? slowRate() : state.settings.rate);
+    await speakWord(it.text, slow ? slowRate() : baseRate());
     word.classList.remove('speaking');
     if (!run.restNudged && Date.now() - run.startedAt > REST_AFTER_MS) {
       run.restNudged = true;

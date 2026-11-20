@@ -215,3 +215,9 @@ noscript p { padding: 2rem 1rem; }
 .chart .bar { fill: var(--mint-strong); }
 button.cal-day { border: 0; font-family: inherit; color: var(--ink); cursor: pointer; width: 100%; }
 .actions .row .btn { min-width: 0; }
+
+/* 목소리 설치 안내 (접었다 펴기) */
+details.tips { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 0.6rem 0.9rem; margin: 0.8rem 0; }
+details.tips summary { cursor: pointer; font-weight: 600; min-height: 2.6rem; display: flex; align-items: center; }
+details.tips .steps { margin: 0.5rem 0 0; font-size: 1rem; }
+.choices.col .choice small { word-break: break-all; }

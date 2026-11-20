@@ -34,29 +34,54 @@ export function isSupported(env) {
 
 let voicesCache = null;
 
+const isKorean = (v) => /^ko([-_]|$)/i.test(v.lang || '') || /한국|korean/i.test(v.name || '');
+// 고품질 목소리(향상된·프리미엄·신경망)를 앞에, 기기 안에서 만드는 목소리를 그다음에
+const quality = (v) => (/premium|enhanced|neural|natural|향상|고품질|프리미엄/i.test(v.name) ? 2 : 0) + (v.localService !== false ? 1 : 0);
+
+function readVoices() {
+  return speechSynthesis.getVoices().filter(isKorean).sort((a, b) => quality(b) - quality(a));
+}
+
 /**
- * 기기에 있는 한국어 목소리 목록. 기기 안에서 만드는 목소리(localService)를 앞에 둡니다.
- * (일부 PC 브라우저의 온라인 목소리는 글자를 브라우저 회사 서버로 보내 소리를 만듭니다.)
+ * 기기에 있는 한국어 목소리 목록.
+ * 휴대폰은 목록을 늦게(1~3초) 알려 주는 경우가 많아, 바로 비어 있으면 최대 4초까지 다시 확인합니다.
+ * @param {{refresh?: boolean}} opts refresh: true면 저장해 둔 목록을 버리고 다시 찾음
  */
-export function getKoreanVoices() {
+export function getKoreanVoices({ refresh = false } = {}) {
   if (!('speechSynthesis' in globalThis)) return Promise.resolve([]);
-  if (voicesCache && voicesCache.length) return Promise.resolve(voicesCache);
-  const pick = () => speechSynthesis.getVoices()
-    .filter((v) => /^ko(-|_|$)/i.test(v.lang))
-    .sort((a, b) => Number(b.localService !== false) - Number(a.localService !== false));
+  if (!refresh && voicesCache && voicesCache.length) return Promise.resolve(voicesCache);
   return new Promise((resolve) => {
     let done = false;
     const finish = () => {
       if (done) return;
       done = true;
-      voicesCache = pick();
+      clearInterval(timer);
+      voicesCache = readVoices();
       resolve(voicesCache);
     };
-    const now = pick();
+    const now = readVoices();
     if (now.length) { voicesCache = now; resolve(now); return; }
-    speechSynthesis.addEventListener?.('voiceschanged', finish, { once: true });
-    setTimeout(finish, 1500);
+    speechSynthesis.addEventListener?.('voiceschanged', () => { if (readVoices().length) finish(); });
+    let waited = 0;
+    const timer = setInterval(() => {
+      waited += 250;
+      if (readVoices().length || waited >= 4000) finish();
+    }, 250);
   });
+}
+
+/** 화면에 보여 줄 목소리 이름 (브라우저가 붙인 꼬리표 정리) */
+export function voiceLabel(v) {
+  return String(v.name || '').replace(/\s*\((Korean|한국어)[^)]*\)\s*/gi, ' ').trim() || '기본 목소리';
+}
+
+/**
+ * 읽기 좋게 다듬기: 끝에 마침표가 없으면 붙여, 낱말 하나도 끝을 또렷하게 내려 읽게 함
+ * (끝에 문장부호가 없으면 일부 음성 엔진이 끝음절을 짧게 끊거나 올려 읽음).
+ */
+export function forSpeech(text) {
+  const t = String(text || '').trim();
+  return /[.?!…]$/.test(t) ? t : `${t}.`;
 }
 
 let speakSeq = 0;
@@ -66,22 +91,26 @@ export async function speak(text, { voiceName = '', rate = 1.0 } = {}) {
   if (!('speechSynthesis' in globalThis) || !text) return;
   const voices = await getKoreanVoices();
   const my = ++speakSeq;
-  speechSynthesis.cancel();
+  const busy = speechSynthesis.speaking || speechSynthesis.pending;
+  if (busy) speechSynthesis.cancel();
+  try { speechSynthesis.resume(); } catch { /* 일부 Safari에서 멈춤 상태로 남는 문제 대비 */ }
+  // 멈춘 직후 바로 말하면 휴대폰(특히 Android)에서 앞소리가 잘리는 경우가 있어 잠깐 쉼
+  await new Promise((r) => setTimeout(r, busy ? 150 : 30));
+  if (my !== speakSeq) return;
   return new Promise((resolve) => {
-    const u = new SpeechSynthesisUtterance(text);
+    const u = new SpeechSynthesisUtterance(forSpeech(text));
     u.lang = 'ko-KR';
     u.rate = rate;
     const v = voices.find((x) => x.name === voiceName) || voices[0];
-    if (v) u.voice = v;
-    const t = setTimeout(resolve, Math.max(4000, (text.length * 600) / rate)); // 일부 브라우저의 end 누락 대비
+    if (v) { u.voice = v; u.lang = String(v.lang || 'ko-KR').replace('_', '-'); }
+    const t = setTimeout(resolve, Math.max(4000, (text.length * 700) / rate)); // 일부 브라우저의 end 누락 대비
     u.onend = () => { clearTimeout(t); resolve(); };
     u.onerror = () => { clearTimeout(t); resolve(); };
-    // Chrome에서 cancel 직후 speak가 무시되는 문제를 피하려고 한 박자 쉼
-    setTimeout(() => { if (my === speakSeq) speechSynthesis.speak(u); else resolve(); }, 30);
+    speechSynthesis.speak(u);
   });
 }
 
 export function stopSpeaking() {
   speakSeq++;
-  if ('speechSynthesis' in globalThis) speechSynthesis.cancel();
+  if ('speechSynthesis' in globalThis && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
 }
