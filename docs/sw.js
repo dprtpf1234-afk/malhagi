@@ -1,6 +1,6 @@
 // 서비스 워커: 앱 화면 파일만 저장해 오프라인에서도 열리게 합니다.
 // GAS 요청(다른 도메인)은 건드리지 않습니다. 배포할 때마다 VERSION을 올려 주세요.
-const VERSION = 'v1.4.2';
+const VERSION = 'v2.0.0';
 const CACHE = `malhagi-${VERSION}`;
 const SHELL = [
   './',
@@ -17,7 +17,7 @@ const SHELL = [
   './icons/icon-512.png',
   './icons/apple-touch-icon.png',
   './js/app.js', './js/api.js', './js/config.js', './js/crypto.js', './js/curriculum.js',
-  './js/hangul.js', './js/hints.js', './js/speech.js', './js/store.js', './js/sync.js', './js/ui.js',
+  './js/speech.js', './js/store.js', './js/sync.js', './js/ui.js',
 ];
 
 self.addEventListener('install', (e) => {

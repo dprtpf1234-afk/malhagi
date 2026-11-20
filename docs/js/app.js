@@ -1,13 +1,12 @@
-// 말하기 짝꿍 – 화면과 흐름 (PRD v1.4)
+// 말하기 짝꿍 – 화면과 흐름 (PRD v2.0)
+// v2.0: 음성 인식 없이 '듣고 따라 말하기'를 반복하는 연습. 오늘의 낱말·문장 → 분야별 추가 연습 → 지난 연습 다시 하기.
 import { CONFIG } from './config.js';
 import { h, s, icon, button, toast, clear } from './ui.js';
 import * as speech from './speech.js';
 import * as sync from './sync.js';
 import * as store from './store.js';
 import { ApiError } from './api.js';
-import { bestMatch } from './hangul.js';
-import { hintFor } from './hints.js';
-import { BUILTIN, DIAGNOSIS, STAGES, buildSession, modeOf } from './curriculum.js';
+import { buildCatalog, todaySet, guessType, CUSTOM_ID } from './curriculum.js';
 import { randomId, normalizeRecoveryCode, formatRecoveryCode, RECOVERY_LENGTH, hashPin, b64u, randomBytes } from './crypto.js';
 import { FONT_SIZES, getFontScale, applyFontScale, fontSizeLabel, fitWord } from './font-size.js';
 
@@ -22,21 +21,21 @@ const state = {
   settings: { ...sync.DEFAULT_SETTINGS },
   customWords: [],
   sessions: [],
-  items: BUILTIN,
+  catalog: buildCatalog(null),
   guide: '',
   onboarding: { metricsConsent: false },
-  abort: null,          // 진행 중인 녹음 중단용
   installPrompt: null,  // Android 홈 화면 추가
   fitCurrent: null,     // 연습 낱말 크기 맞추기 (글씨 크기·화면 크기 변경 시)
+  run: null,            // 진행 중인 연습 (그만두거나 끝나면 기록으로 저장)
 };
 
 window.addEventListener('fontscalechange', () => state.fitCurrent?.());
 window.addEventListener('resize', () => state.fitCurrent?.());
 document.fonts?.ready.then(() => state.fitCurrent?.());
 
-const PRAISE = ['잘했어요!', '좋아요!', '정확하게 들렸어요!', '훌륭해요!', '아주 잘했어요!'];
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const LABEL = { word: '낱말', sentence: '문장' };
+const REST_AFTER_MS = 15 * 60 * 1000; // 15분 연속 연습하면 쉬기 권유 (PRD F-06)
 
 // ───────────── 공통 화면 틀 ─────────────
 
@@ -48,27 +47,116 @@ function speakWord(text, rate = state.settings.rate) {
   return speech.speak(text, { voiceName: state.settings.voiceName, rate });
 }
 
-function toggleFullscreen() {
+/** 천천히 듣기 빠르기: 설정한 빠르기의 70% (최소 0.5) */
+function slowRate() {
+  return Math.max(0.5, Math.round(state.settings.rate * 0.7 * 100) / 100);
+}
+
+// ── 전체화면 (PRD v2.0: 휴대폰에서 동작하지 않던 문제 수정) ──
+
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+
+function fullscreenApi() {
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  const enabled = document.fullscreenEnabled ?? document.webkitFullscreenEnabled ?? !!req;
+  return req && enabled !== false ? req : null;
+}
+
+/** 홈 화면 앱으로 열었으면 이미 주소창이 없으므로 버튼을 숨김 */
+function showFullscreenButton() {
+  return !state.env?.standalone;
+}
+
+async function toggleFullscreen() {
   const d = document;
-  const el = d.documentElement;
-  if (d.fullscreenElement || d.webkitFullscreenElement) (d.exitFullscreen || d.webkitExitFullscreen).call(d);
-  else (el.requestFullscreen || el.webkitRequestFullscreen).call(el).catch?.(() => {});
+  try {
+    if (isFullscreen()) {
+      const exit = d.exitFullscreen || d.webkitExitFullscreen;
+      await exit?.call(d);
+      return;
+    }
+    const req = fullscreenApi();
+    if (!req) { openFullscreenHelp(); return; }
+    // 옛 webkit 방식은 Promise를 돌려주지 않으므로 await로 감쌈 (전에는 여기서 오류가 나 버튼이 먹통이었음)
+    await req.call(d.documentElement, { navigationUI: 'hide' });
+    // 일부 휴대폰 브라우저는 오류 없이 무시함 → 잠시 뒤 확인해서 안내
+    setTimeout(() => { if (!isFullscreen()) openFullscreenHelp(); }, 700);
+  } catch {
+    openFullscreenHelp();
+  }
+}
+
+function updateFullscreenButtons() {
+  const label = isFullscreen() ? '전체화면 끝' : '전체화면';
+  document.querySelectorAll('.fs-btn span').forEach((sp) => { sp.textContent = label; });
+}
+document.addEventListener('fullscreenchange', updateFullscreenButtons);
+document.addEventListener('webkitfullscreenchange', updateFullscreenButtons);
+
+/** 전체화면을 쓸 수 없을 때: 홈 화면에 추가하면 주소창 없이 열린다고 안내 */
+function openFullscreenHelp() {
+  const env = state.env;
+  const steps = env.isIOS
+    ? ['Safari 아래쪽(아이패드는 위쪽)의 공유 버튼(네모에 위쪽 화살표)을 눌러요.', '"홈 화면에 추가"를 눌러요.', '오른쪽 위 "추가"를 눌러요.', '홈 화면의 말하기 짝꿍 아이콘으로 열면 주소창 없이 화면 전체로 보여요.']
+    : ['브라우저 메뉴(⋮ 또는 ≡)를 눌러요.', '"홈 화면에 추가" 또는 "앱 설치"를 눌러요.', '홈 화면의 말하기 짝꿍 아이콘으로 열면 주소창 없이 화면 전체로 보여요.'];
+  const text = env.isIOS
+    ? '아이폰·아이패드 Safari는 전체화면 버튼을 지원하지 않아요. 대신 홈 화면에 추가하면 앱처럼 화면 전체로 쓸 수 있어요.'
+    : '이 브라우저에서는 전체화면이 되지 않아요. 홈 화면에 추가하면 앱처럼 화면 전체로 쓸 수 있어요.';
+  const extra = !env.isIOS && state.installPrompt
+    ? button('지금 홈 화면에 추가', async () => {
+      state.installPrompt.prompt();
+      try { await state.installPrompt.userChoice; } catch { /* 무시 */ }
+      state.installPrompt = null;
+      close();
+    })
+    : null;
+  const { close } = openSheet('전체화면으로 보기', [
+    h('p', { text }),
+    h('ol', { class: 'steps' }, steps.map((t) => h('li', { text: t }))),
+    extra,
+  ]);
+  speech.speak(text, { voiceName: state.settings.voiceName, rate: state.settings.rate });
+}
+
+/** 아래에서 올라오는 창 (화면을 다시 그리지 않으므로 연습 중에도 안전) */
+function openSheet(titleText, children, onClose) {
+  document.querySelector('.overlay')?.remove();
+  const opener = document.activeElement;
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+    opener?.focus?.({ preventScroll: true });
+    onClose?.();
+  };
+  const title = h('h2', { tabindex: '-1', id: 'sheet-title', text: titleText });
+  const overlay = h('div', { class: 'overlay', onclick: (e) => { if (e.target === overlay) close(); } },
+    h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sheet-title' },
+      title, children, button('닫기', () => close())));
+  document.body.append(overlay);
+  document.addEventListener('keydown', onKey);
+  title.focus();
+  return { close };
 }
 
 /**
- * 한 화면 = 위쪽 막대(다시 듣기·전체화면·추가 버튼) + 본문 + 아래쪽 큰 버튼.
+ * 한 화면 = 위쪽 막대(안내 듣기·글씨 크기·전체화면·추가 버튼) + 본문 + 아래쪽 큰 버튼.
  */
-function screen({ guide = '', title = '', body = [], actions = [], top = [], className = '', fullscreenButton = true }) {
+function screen({ guide = '', title = '', body = [], actions = [], top = [], className = '' }) {
   state.guide = guide || title;
   state.fitCurrent = null;
   speech.stopSpeaking();
+  document.querySelector('.overlay')?.remove();
   clear($app);
   const topbar = h('div', { class: 'topbar' },
-    guide ? button('다시 듣기', speakGuide, { kind: 'tool', iconName: 'speaker' }) : h('span'),
+    guide ? button('안내 듣기', speakGuide, { kind: 'tool', iconName: 'info' }) : h('span'),
     h('div', { class: 'topbar-right' },
       button('글씨 크기', () => openFontSizePanel(), { kind: 'tool', iconName: 'text' }),
       top,
-      fullscreenButton && state.env?.fullscreen ? button('전체화면', toggleFullscreen, { kind: 'tool', iconName: 'expand' }) : null));
+      showFullscreenButton() ? button(isFullscreen() ? '전체화면 끝' : '전체화면', toggleFullscreen, { kind: 'tool fs-btn', iconName: 'expand' }) : null));
   const heading = title ? h('h1', { tabindex: '-1', text: title }) : null;
   const main = h('main', { class: `screen ${className}` }, heading, body);
   const footer = actions.length ? h('div', { class: 'actions' }, actions) : null;
@@ -172,13 +260,14 @@ async function boot() {
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); state.installPrompt = e; });
   window.addEventListener('online', () => backgroundSync());
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { speech.stopSpeaking(); state.abort?.abort(); }
+    if (document.hidden) { speech.stopSpeaking(); saveRun(); }
   });
+  window.addEventListener('pagehide', () => saveRun());
 
   if (!speech.isSupported(state.env)) return screenUnsupported();
 
   await reloadLocal();
-  sync.fetchCurriculum().then((items) => { if (items) state.items = items; });
+  sync.fetchCurriculum().then((items) => { state.catalog = buildCatalog(items); });
 
   const pin = await store.kvGet('pin');
   if (pin) return screenPin(route);
@@ -190,13 +279,13 @@ async function reloadLocal() {
   state.settings = await sync.loadSettings();
   state.customWords = await sync.loadCustomWords();
   state.sessions = await sync.loadSessions();
+  const cached = await store.kvGet('curriculum');
+  if (cached) state.catalog = buildCatalog(cached);
 }
 
 async function route() {
   if (!state.identity) return screenWelcome();
-  speech.prepareOnDevice(); // 기기 내 인식 가능 여부 확인 (설치는 하지 않음)
   backgroundSync();
-  if (state.settings.stage == null) return screenDiagnosisIntro();
   return screenHome();
 }
 
@@ -216,21 +305,16 @@ async function backgroundSync() {
 
 function screenUnsupported() {
   const env = state.env;
-  let title = '이 화면에서는 말하기 연습이 어려워요';
+  const title = '이 화면에서는 연습이 어려워요';
   let text = 'Chrome 또는 Safari로 열어 주세요.';
   const steps = [];
-  if (env.isIOS && env.standalone) {
-    text = '아이폰·아이패드의 홈 화면 아이콘으로 열면 음성 인식이 동작하지 않아요. Safari에서 주소를 열어 주세요. 기록은 그대로 이어져요.';
-    steps.push('아래 "주소 복사하기"를 눌러요.', 'Safari를 열고 주소창에 붙여 넣어요.', '홈 화면의 말하기 짝꿍 아이콘은 지워도 괜찮아요.');
-  } else if (env.inApp) {
-    text = '카카오톡 같은 앱 안의 화면에서는 마이크가 잘 동작하지 않아요. Chrome 또는 Safari로 열어 주세요.';
+  if (env.inApp) {
+    text = '카카오톡 같은 앱 안의 화면에서는 기록이 지워지거나 소리가 나지 않을 수 있어요. Chrome 또는 Safari로 열어 주세요.';
     steps.push('화면 오른쪽 위나 아래의 메뉴(⋮ 또는 공유) 버튼을 눌러요.', '"다른 브라우저로 열기" 또는 "Safari로 열기"를 눌러요.');
   } else if (!env.secure) {
     text = '보안 연결(https) 주소로 열어 주세요.';
-  } else if (!env.stt) {
-    text = '이 브라우저는 음성 인식을 지원하지 않아요. Chrome(안드로이드·PC) 또는 Safari(아이폰·아이패드)로 열어 주세요.';
-  } else if (!env.mic) {
-    text = '마이크를 쓸 수 없는 환경이에요. 마이크가 있는 기기에서 열어 주세요.';
+  } else if (!env.tts) {
+    text = '이 브라우저는 소리 내어 읽어 주는 기능이 없어요. Chrome(안드로이드·PC) 또는 Safari(아이폰·아이패드)로 열어 주세요.';
   }
   screen({
     guide: `${title}. ${text}`,
@@ -253,10 +337,10 @@ function disclaimer() {
 
 function screenWelcome() {
   screen({
-    guide: '말하기 짝꿍이에요. 매일 조금씩 소리 내어 연습해요. 처음이면 처음이에요 버튼을, 복구 코드가 있으면 아래 버튼을 눌러 주세요.',
+    guide: '말하기 짝꿍이에요. 듣고 따라 말하며 매일 조금씩 연습해요. 처음이면 처음이에요 버튼을, 복구 코드가 있으면 아래 버튼을 눌러 주세요.',
     title: '말하기 짝꿍',
     body: [
-      para('매일 조금씩, 소리 내어 연습해요.', 'lead'),
+      para('듣고 따라 말하며, 매일 조금씩 연습해요.', 'lead'),
       disclaimer(),
       h('a', { href: './privacy.html', class: 'link', text: '개인정보 처리방침' }),
     ],
@@ -272,61 +356,28 @@ function screenConsent() {
   const opt = h('input', { type: 'checkbox', id: 'c-opt' });
   const next = button('동의하고 다음', () => {
     state.onboarding.metricsConsent = opt.checked;
-    screenMic();
+    screenVoice();
   }, { disabled: true });
   req.addEventListener('change', () => { next.disabled = !req.checked; });
 
   const points = [
     ['연습을 돕는 도구예요', '치료를 대신하지 않아요.'],
     ['기록은 나만 볼 수 있어요', '연습 기록은 이 기기에서 잠가서(암호화) 보관해요. 운영자도 내용을 볼 수 없어요.'],
-    ['목소리는 저장하지 않아요', '다만 글자로 바꾸기 위해 Google이나 Apple 서버로 잠깐 보내질 수 있어요.'],
+    ['마이크를 쓰지 않아요', '목소리를 녹음하거나 보내지 않아요. 들려주는 소리만 나와요.'],
     ['복구 코드를 꼭 보관해요', '복구 코드를 잃고 이 기기 기록도 지워지면, 누구도 기록을 되찾을 수 없어요.'],
   ];
   screen({
-    guide: points.map((p) => p.join('. ')).join('. ') + '. 동의하면 첫 번째 칸을 눌러 주세요.',
+    guide: points.map((p) => p.join('. ')).join('. ') + '. 동의하면 아래 첫 번째 칸을 눌러 주세요.',
     title: '시작하기 전에',
     body: [
       h('ul', { class: 'points' }, points.map(([t, d]) => h('li', {}, h('strong', { text: t }), h('span', { text: d })))),
-      h('label', { class: 'check', for: 'c-opt' }, opt, h('span', {}, h('b', { text: '[선택] ' }), '서비스 개선을 위해 날짜별 연습 횟수만 보내는 것에 동의해요. 낱말과 결과는 보내지 않아요.')),
+      h('label', { class: 'check', for: 'c-opt' }, opt, h('span', {}, h('b', { text: '[선택] ' }), '서비스 개선을 위해 날짜별 연습 횟수만 보내는 것에 동의해요. 낱말과 문장은 보내지 않아요.')),
       h('p', { class: 'small' }, '만 14세 이상 성인을 위한 서비스예요. ', h('a', { href: './privacy.html', class: 'link', text: '개인정보 처리방침 보기' })),
     ],
     actions: [
       h('label', { class: 'check', for: 'c-req' }, req, h('span', {}, h('b', { text: '[필수] ' }), '연습 기록(건강 관련 정보)을 처리하는 것에 동의해요.')),
       h('div', { class: 'row' }, button('뒤로', () => screenFontSize(screenConsent), { kind: 'secondary' }), next),
     ],
-  });
-}
-
-function screenMic(after = screenVoice) {
-  screen({
-    guide: '말하기 연습을 하려면 마이크가 필요해요. 아래 버튼을 누른 뒤, 허용을 눌러 주세요.',
-    title: '마이크가 필요해요',
-    body: [para('아래 버튼을 누른 뒤, 화면에 나오는 창에서 "허용"을 눌러 주세요.', 'lead')],
-    actions: [button('마이크 허용하기', async () => {
-      const r = await speech.requestMic();
-      if (r === 'granted') {
-        // 기기 내 음성 인식이 가능하면 언어 팩 설치 시도 (최대 5초만 기다림)
-        await Promise.race([speech.prepareOnDevice({ install: true }), sleep(5000)]);
-        return after();
-      }
-      return screenMicHelp(r, after);
-    }, { iconName: 'mic' })],
-  });
-}
-
-function screenMicHelp(reason, after) {
-  const env = state.env;
-  const steps = reason === 'nodevice'
-    ? ['이어폰 마이크나 기기 마이크가 연결되어 있는지 확인해요.', '다른 앱이 마이크를 쓰고 있으면 닫아요.']
-    : env.isIOS
-      ? ['아이폰 "설정" 앱을 열어요.', '아래로 내려 "Safari"를 눌러요.', '"마이크"를 눌러 "허용"으로 바꿔요.', '이 화면으로 돌아와 다시 시도해요.']
-      : ['주소창 왼쪽의 자물쇠(또는 설정) 표시를 눌러요.', '"권한" 또는 "마이크"를 눌러 "허용"으로 바꿔요.', '이 화면으로 돌아와 다시 시도해요.'];
-  const title = reason === 'nodevice' ? '마이크를 찾을 수 없어요' : '내 목소리를 듣기 위해 마이크 권한이 필요해요';
-  screen({
-    guide: `${title}. ${steps.join(' ')}`,
-    title,
-    body: [h('ol', { class: 'steps' }, steps.map((t) => h('li', { text: t })))],
-    actions: [button('다시 시도', () => screenMic(after))],
   });
 }
 
@@ -373,9 +424,10 @@ async function screenVoice({ fromSettings = false } = {}) {
     title: '목소리 고르기',
     body: [
       voices.length === 0
-        ? para('기기에 한국어 목소리가 없어요. 기기 설정의 "음성 출력(TTS)"에서 한국어를 추가하면 들을 수 있어요. 목소리 없이도 연습할 수 있어요.', 'lead')
+        ? para('기기에 한국어 목소리가 없어요. 기기 설정의 "음성 출력(TTS)" 또는 "음성 콘텐츠"에서 한국어를 추가해 주세요.', 'warn')
         : voices.length > 1 ? [h('h2', { text: '목소리' }), voiceList] : null,
       h('h2', { text: '빠르기' }), rateList,
+      para("연습할 때 '천천히 듣기'를 누르면 이보다 더 천천히 들려줘요.", 'small'),
     ],
     actions: [button(fromSettings ? '저장' : '다음', done)],
   });
@@ -391,7 +443,7 @@ async function screenCreateKeys() {
     await sync.saveSettings(identity, state.settings);
     store.requestPersist();
     flushQuiet();
-    screenRecoveryCode(recoveryCode, screenInstall);
+    screenRecoveryCode(recoveryCode, () => screenInstall(screenHome));
   } catch (e) {
     screen({
       guide: errorText(e),
@@ -527,23 +579,23 @@ function screenDisconnected() {
   });
 }
 
-// ───────────── 홈 화면 추가 / 전체화면 ─────────────
+// ───────────── 홈 화면 추가 ─────────────
 
-function screenInstall(next = screenDiagnosisIntro) {
+function screenInstall(next = screenHome) {
   const env = state.env;
   const body = [];
   const actions = [];
+  if (env.standalone) return next();
   if (env.isIOS) {
-    // 아이폰 홈 화면 앱에서는 음성 인식이 동작하지 않으므로 Safari 즐겨찾기로 안내
     body.push(
-      para('Safari 즐겨찾기에 넣어 두면 다음에 쉽게 열 수 있어요. 홈 화면 아이콘으로는 음성 인식이 동작하지 않으니 Safari에서 열어 주세요.', 'lead'),
+      para('홈 화면에 추가하면 주소창 없이 화면 전체로 보이고, 기록도 더 안전하게 보관돼요.', 'lead'),
       h('ol', { class: 'steps' },
         h('li', { text: 'Safari 아래쪽(아이패드는 위쪽)의 공유 버튼(네모에 위쪽 화살표)을 눌러요.' }),
-        h('li', { text: '"즐겨찾기에 추가"를 눌러요.' }),
-        h('li', { text: '오른쪽 위 "저장"을 눌러요.' })),
-      para('일주일 넘게 쓰지 않으면 Safari가 이 기기의 기록을 지울 수 있어요. 그래도 복구 코드로 다시 연결하면 기록이 돌아와요.', 'note'));
+        h('li', { text: '"홈 화면에 추가"를 눌러요.' }),
+        h('li', { text: '오른쪽 위 "추가"를 눌러요.' }),
+        h('li', { text: '다음부터는 홈 화면의 말하기 짝꿍 아이콘으로 열어요.' })));
   } else {
-    body.push(para('홈 화면에 추가하면 앱처럼 바로 열 수 있어요.', 'lead'));
+    body.push(para('홈 화면에 추가하면 앱처럼 바로 열리고 화면 전체로 보여요.', 'lead'));
     if (state.installPrompt) {
       actions.push(button('홈 화면에 추가', async () => {
         state.installPrompt.prompt();
@@ -551,374 +603,158 @@ function screenInstall(next = screenDiagnosisIntro) {
         state.installPrompt = null;
         next();
       }));
+    } else {
+      body.push(h('ol', { class: 'steps' },
+        h('li', { text: '브라우저 메뉴(⋮ 또는 ≡)를 눌러요.' }),
+        h('li', { text: '"홈 화면에 추가" 또는 "앱 설치"를 눌러요.' })));
     }
-    if (env.fullscreen) actions.push(button('전체화면으로 보기', toggleFullscreen, { kind: 'secondary', iconName: 'expand' }));
   }
-  actions.push(button(actions.length ? '건너뛰기' : '다음', next, { kind: actions.length ? 'secondary' : 'primary' }));
-  screen({ guide: body.map((n) => n.textContent).join(' '), title: env.isIOS ? '쉽게 다시 여는 방법' : '홈 화면에 추가하기', body, actions });
+  actions.push(button(actions.length ? '건너뛰기' : '다음', () => next(), { kind: actions.length ? 'secondary' : 'primary' }));
+  screen({ guide: body.map((n) => n.textContent).join(' '), title: '홈 화면에 추가하기', body, actions });
 }
 
-// ───────────── 연습 한 문항 ─────────────
+// ───────────── 연습 (PRD v2.0 F-04, F-05) ─────────────
+
+/** 띄어쓰기 단위로 묶어(.wg) 낱말 중간에서 줄이 바뀌지 않게 함 */
+function wordEl(text) {
+  const el = h('div', { class: 'word', lang: 'ko' });
+  let group = null;
+  Array.from(text).forEach((c) => {
+    if (c === ' ') { group = null; el.append(' '); return; }
+    if (!group) { group = h('span', { class: 'wg' }); el.append(group); }
+    group.append(c);
+  });
+  return el;
+}
+
+function logOf(run, it) {
+  if (!run.log.has(it.text)) run.log.set(it.text, { text: it.text, type: it.type, category: it.category || '', plays: 0, slow: 0 });
+  return run.log.get(it.text);
+}
 
 /**
- * 한 문항 연습 (PRD F-04, F-05).
- * @returns {Promise<{final:'pass'|'skip'|'listen'|'quit', attempts:Array, bestRate:number}>}
+ * 연습 시작.
+ * @param {{source:'today'|'category'|'review', type:'word'|'sentence'|'mixed', title:string, items:Array, start?:number, back?:Function}} opts
  */
-function practiceItem(item, { index, total, diagnosis = false }) {
-  return new Promise((resolve) => {
-    const mode = modeOf(item);
-    const maxAttempts = diagnosis ? 2 : CONFIG.MAX_ATTEMPTS;
-    const attempts = [];
-    let counted = 0;
-    let bestRate = 0;
-    let hintShown = false;
-    let finished = false;
-
-    const finish = (final) => {
-      if (finished) return;
-      finished = true;
-      state.fitCurrent = null;
-      state.abort?.abort();
-      speech.stopSpeaking();
-      resolve({ final, attempts, bestRate });
-    };
-
-    const displayText = mode === 'phonation' ? `${item.text}–` : item.text;
-    // 띄어쓰기 단위로 묶어(.wg) 낱말 중간에서 줄이 바뀌지 않게 하고, 글자마다(.ch) 오답 표시
-    const word = h('div', { class: 'word', lang: 'ko' });
-    const charEls = []; // 원문 글자 위치 → 글자 요소 (띄어쓰기는 null)
-    let group = null;
-    Array.from(displayText).forEach((c) => {
-      if (c === ' ') { group = null; word.append(' '); charEls.push(null); return; }
-      if (!group) { group = h('span', { class: 'wg' }); word.append(group); }
-      const el = h('span', { class: 'ch', text: c });
-      group.append(el);
-      charEls.push(el);
-    });
-    const markWrong = (positions) => {
-      charEls.forEach((el, i) => {
-        if (!el) return;
-        el.classList.remove('hl-a', 'hl-b');
-        const k = positions.indexOf(i);
-        if (k >= 0) el.classList.add(k % 2 ? 'hl-b' : 'hl-a');
-      });
-    };
-    const feedback = h('p', { class: 'feedback', role: 'status', 'aria-live': 'polite' });
-    const gaugeFill = h('div', { class: 'gauge-fill' });
-    const gauge = h('div', { class: 'gauge hidden', role: 'img', 'aria-label': '' }, gaugeFill);
-    const hintBox = h('div', { class: 'hint hidden' });
-    const ring = h('div', { class: 'ring', 'aria-hidden': 'true' });
-
-    const micBtn = button('말하기', () => listen(), { kind: 'mic', iconName: 'mic' });
-    const replayBtn = button('낱말 듣기', () => speakWord(item.text), { kind: 'secondary', iconName: 'speaker' });
-    const nextBtn = (label = '다음') => button(label, () => finish(pendingFinal), {});
-    let pendingFinal = 'pass';
-    const actionsEl = h('div', { class: 'actions' });
-    const setActions = (...btns) => { clear(actionsEl); actionsEl.append(...btns); };
-    const setBusy = (busy) => { micBtn.disabled = busy; replayBtn.disabled = busy; };
-
-    const guideText = mode === 'phonation'
-      ? `"${item.text}" 소리를 길게 내 보세요. 말하기 버튼을 누르고 ${item.text}— 하고 소리 내요.`
-      : `"${item.text}". 말하기 버튼을 누르고 따라 말해 보세요.`;
-
-    screen({
-      guide: guideText,
-      body: [
-        h('p', { class: 'progress', text: diagnosis ? `${index + 1} / ${total}` : `${index + 1} / ${total}${item.custom ? ' · 나만의 낱말' : ''}` }),
-        h('div', { class: 'stage-word' }, ring, word),
-        gauge, feedback, hintBox,
-      ],
-      top: [button('그만하기', () => finish('quit'), { kind: 'tool', iconName: 'stop' })],
-      className: 'practice',
-      fullscreenButton: false,
-    });
-    $app.append(actionsEl);
-    setActions(micBtn, replayBtn);
-    state.fitCurrent = () => fitWord(word);
-    requestAnimationFrame(() => state.fitCurrent?.());
-    sleep(300).then(() => { if (!finished) speakWord(item.text); });
-
-    const showHint = (firstWrong) => {
-      if (hintShown || diagnosis) return;
-      hintShown = true;
-      clear(hintBox);
-      if (mode === 'phonation') {
-        hintBox.append(h('p', { text: '숨을 크게 들이쉬고, 입을 벌린 채 소리를 길게 이어 보세요.' }));
-      } else {
-        const hint = firstWrong ? hintFor(firstWrong.jamo, firstWrong.role) : null;
-        if (hint) {
-          let img = null;
-          if (CONFIG.HINT_IMAGES) {
-            img = h('img', { src: `./hints/${encodeURIComponent(hint.jamo)}.svg`, alt: '', class: 'hint-img' });
-            img.addEventListener('error', () => img.remove());
-          }
-          hintBox.append(...[h('div', { class: 'hint-jamo', text: hint.jamo }), img, h('p', { text: hint.text })].filter(Boolean));
-        } else {
-          hintBox.append(h('p', { text: '천천히 들어 보고 한 글자씩 따라 해 봐요.' }));
-        }
-      }
-      hintBox.classList.remove('hidden');
-      speakWord(item.text, 0.7); // 천천히 듣기
-    };
-
-    const giveUp = async () => {
-      setBusy(true);
-      pendingFinal = 'skip';
-      feedback.textContent = diagnosis ? '좋아요. 다음 낱말로 가요.' : '이 낱말은 다음에 다시 만나요. 잘하고 있어요!';
-      if (!diagnosis) await speakWord(item.text);
-      setActions(nextBtn());
-    };
-
-    const onResult = async (rate, wrong, firstWrong, transcript) => {
-      counted++;
-      bestRate = Math.max(bestRate, rate);
-      const pass = diagnosis ? rate >= CONFIG.PARTIAL_THRESHOLD : rate >= CONFIG.PASS_THRESHOLD;
-      const partial = !pass && rate >= CONFIG.PARTIAL_THRESHOLD;
-      attempts.push({ transcript: String(transcript || '').slice(0, 60), rate: Math.round(rate * 100) / 100, result: pass ? 'pass' : partial ? 'partial' : 'retry', hint: hintShown });
-
-      if (pass) {
-        markWrong([]);
-        gauge.classList.add('hidden');
-        feedback.textContent = pick(PRAISE);
-        pendingFinal = 'pass';
-        setActions(nextBtn());
-        return;
-      }
-      markWrong(wrong);
-      if (partial) {
-        feedback.textContent = '거의 다 왔어요!';
-        gauge.classList.remove('hidden');
-        gauge.setAttribute('aria-label', `알아들은 정도 ${Math.round(rate * 100)}퍼센트`);
-        requestAnimationFrame(() => { gaugeFill.style.width = `${Math.round(rate * 100)}%`; });
-      } else {
-        feedback.textContent = '괜찮아요. 천천히 다시 해 봐요.';
-      }
-      if (counted >= maxAttempts) return giveUp();
-      showHint(firstWrong);
-      setBusy(false);
-    };
-
-    async function listen() {
-      setBusy(true);
-      speech.stopSpeaking();
-      state.abort = new AbortController();
-      const signal = state.abort.signal;
-      try {
-        if (mode === 'phonation') {
-          feedback.textContent = `"${item.text}—" 하고 길게 소리 내 보세요.`;
-          ring.classList.add('on');
-          const r = await speech.phonationTest({ signal, onLevel: (lv) => ring.style.setProperty('--lv', lv.toFixed(2)) });
-          ring.classList.remove('on');
-          if (signal.aborted) { setBusy(false); return; }
-          if (r.silent) { feedback.textContent = '다시 한번 소리 내 볼까요?'; setBusy(false); return; }
-          return onResult(r.passed ? 1 : Math.min(0.99, r.longestMs / CONFIG.PHONATION_MS), [], null, `${r.longestMs}ms`);
-        }
-
-        // 주변 소음 확인 (시도 횟수에 넣지 않음)
-        let ambient = 0;
-        if (CONFIG.AMBIENT_CHECK) {
-          feedback.textContent = '잠깐만요…';
-          // 측정에 실패하면(일부 기기에서 마이크 전환 문제) 소음 확인만 건너뜀
-          try { ambient = await speech.measureAmbient(); } catch { ambient = 0; }
-        }
-        if (signal.aborted) { setBusy(false); return; }
-        if (ambient > CONFIG.NOISE_RMS) {
-          const goOn = await new Promise((res) => {
-            feedback.textContent = '주변이 조금 시끄러운 것 같아요. 조용한 곳에서 해 볼까요?';
-            setActions(button('그래도 할게요', () => res(true)), button('나중에 할게요', () => res(false), { kind: 'secondary' }));
-          });
-          setActions(micBtn, replayBtn);
-          if (!goOn) return finish('quit');
-        }
-
-        feedback.textContent = '듣고 있어요. 말해 보세요.';
-        ring.classList.add('on');
-        const r = await speech.recognizeOnce({ signal, onSpeechStart: () => ring.classList.add('speaking') });
-        ring.classList.remove('on', 'speaking');
-        if (signal.aborted) { setBusy(false); return; }
-
-        if (r.error) return handleError(r.error);
-        const m = bestMatch(item.text, r.alternatives, item.accept || []);
-        return onResult(m.rate, m.wrong, m.firstWrong, m.transcript);
-      } catch {
-        ring.classList.remove('on', 'speaking');
-        feedback.textContent = '마이크를 쓸 수 없어요. 마이크 연결과 권한을 확인해 주세요.';
-        setBusy(false);
-      }
-    }
-
-    function handleError(code) {
-      if (code === 'no-speech' || code === 'aborted' || code === 'start-failed') {
-        feedback.textContent = '다시 한번 말해 볼까요?'; // 시도 횟수에 넣지 않음
-        setBusy(false);
-        return;
-      }
-      if (code === 'not-allowed') {
-        feedback.textContent = '마이크 권한이 꺼져 있어요.';
-        return setActions(button('마이크 다시 켜기', () => screenMicHelp('denied', () => finish('quit'))), button('그만하기', () => finish('quit'), { kind: 'secondary' }));
-      }
-      if (code === 'service-not-allowed') {
-        feedback.textContent = state.env.isIOS
-          ? '아이폰 "설정 → 일반 → 키보드"에서 "받아쓰기"를 켜야 말하기 연습을 할 수 있어요.'
-          : '이 기기에서 음성 인식을 쓸 수 없어요.';
-        setBusy(false);
-        return;
-      }
-      if (code === 'audio-capture') {
-        feedback.textContent = '마이크를 찾을 수 없어요. 이어폰 마이크를 확인해 주세요.';
-        setBusy(false);
-        return;
-      }
-      if (code === 'network' || code === 'language-not-supported' || code === 'unsupported') {
-        // 듣고 따라 말하기 모드: 판정하지 않음 (PRD 7장)
-        feedback.textContent = '지금은 인터넷 연결이 없어 듣고 따라 말하기로 연습해요. 들어 보고 따라 말해 보세요.';
-        pendingFinal = 'listen';
-        speakWord(item.text);
-        return setActions(nextBtn('따라 말했어요'), replayBtn);
-      }
-      feedback.textContent = '다시 한번 말해 볼까요?';
-      setBusy(false);
-    }
-  });
+function startRun({ source, type, title, items, start = 0, back }) {
+  if (!items.length) return;
+  if (state.run) saveRun({ keep: false });
+  state.run = { id: randomId(), source, type, title, items, back, startedAt: Date.now(), log: new Map(), completed: false, restNudged: false, index: start };
+  showRunItem(start);
 }
 
-// ───────────── 진단 ─────────────
-
-function screenDiagnosisIntro() {
-  screen({
-    guide: '지금 말하기에 맞는 연습을 골라 드릴게요. 낱말 다섯 개를 따라 말해 보세요.',
-    title: '연습 고르기',
-    body: [para('지금 말하기에 맞는 연습을 골라 드릴게요. 낱말 5개를 따라 말해 보세요.', 'lead'), disclaimer()],
-    actions: [button('시작하기', runDiagnosis)],
-  });
-}
-
-async function runDiagnosis() {
-  let assigned = null;
-  let anyRecognized = false;
-  for (let i = 0; i < DIAGNOSIS.length; i++) {
-    const it = DIAGNOSIS[i];
-    const r = await practiceItem(it, { index: i, total: DIAGNOSIS.length, diagnosis: true });
-    if (r.final === 'quit') return screenHomeOr(() => screenDiagnosisIntro());
-    if (r.bestRate > 0) anyRecognized = true;
-    if (r.final !== 'pass' && r.final !== 'listen') { assigned = Math.max(1, it.stage - 1); break; }
-  }
-  if (assigned === null) assigned = anyRecognized ? 6 : 1;
-  state.settings.stage = assigned;
-  await sync.saveSettings(state.identity, state.settings);
+/**
+ * 연습 기록 저장. 같은 id로 덮어쓰므로 여러 번 불러도 기록은 하나.
+ * keep: true면 연습을 계속함(앱이 잠깐 가려질 때 중간 저장).
+ */
+async function saveRun({ keep = true, completed = false } = {}) {
+  const run = state.run;
+  if (!run || !state.identity) return null;
+  if (!keep) state.run = null;
+  if (completed) run.completed = true;
+  // 화면에 나온 낱말·문장은 모두 기록 (빨리 넘겨서 못 들은 것도 '연습한 것'으로 다시 하기에 나오도록)
+  const items = [...run.log.values()];
+  if (!items.length) return null;
+  const session = {
+    id: run.id, startedAt: run.startedAt, endedAt: Date.now(), source: run.source, type: run.type,
+    title: run.title, total: run.items.length, completed: run.completed, items: items.map((x) => ({ ...x })),
+  };
+  state.sessions = state.sessions.filter((x) => x.id !== session.id).concat(session);
+  await sync.saveSession(state.identity, session);
   flushQuiet();
-  const st = STAGES[assigned - 1];
-  screen({
-    guide: `오늘은 ${st.name}부터 연습해요. 연습 단계는 설정에서 언제든 바꿀 수 있어요.`,
-    title: `오늘은 "${st.name}"부터 연습해요`,
-    body: [para(st.desc, 'lead'), para('연습 단계는 설정에서 언제든 바꿀 수 있어요.')],
-    actions: [button('연습 시작', runSession), button('처음 화면으로', screenHome, { kind: 'secondary' })],
-  });
+  return session;
 }
 
-function screenHomeOr(fallback) {
-  return state.settings.stage == null ? fallback() : screenHome();
-}
-
-// ───────────── 세션 ─────────────
-
-function recentPassedTexts() {
-  const set = new Set();
-  state.sessions.slice(-5).forEach((ss) => ss.items.forEach((it) => { if (it.final === 'pass') set.add(it.text); }));
-  return set;
-}
-
-function sessionsToday() {
-  const today = sync.dateKey();
-  return state.sessions.filter((ss) => sync.dateKey(ss.startedAt) === today).length;
-}
-
-async function runSession() {
-  const settings = state.settings;
-  const stage = settings.stage || 1;
-  const items = buildSession({
-    items: state.items,
-    stage,
-    customWords: stage >= 2 ? state.customWords : [],
-    reaskQueue: (settings.reaskQueue || []).filter((q) => (q.stage === 1) === (stage === 1)),
-    recentPassed: recentPassedTexts(),
-    size: CONFIG.SESSION_SIZE,
-    maxCustom: CONFIG.MAX_CUSTOM_PER_SESSION,
-    maxReask: CONFIG.MAX_REASK_PER_SESSION,
-  });
-
-  const session = { id: randomId(), startedAt: Date.now(), endedAt: 0, stage, onDevice: speech.usesOnDevice(), items: [] };
-  let skipRun = 0;
-  let easierAsked = false;
-  let stageChanged = null;
-
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    const r = await practiceItem(it, { index: i, total: items.length });
-    if (r.final === 'quit') break;
-    session.items.push({ id: it.id, text: it.text, stage: it.stage, custom: !!it.custom, reask: !!it.reask, final: r.final, bestRate: Math.round(r.bestRate * 100) / 100, attempts: r.attempts });
-    skipRun = r.final === 'skip' ? skipRun + 1 : 0;
-    if (skipRun >= CONFIG.CONSECUTIVE_SKIP_SUGGEST && stage > 1 && !easierAsked) {
-      easierAsked = true;
-      const yes = await ask({ title: '조금 쉬운 연습으로 바꿔 볼까요?', text: `"${STAGES[stage - 2].name}" 연습으로 바꿀 수 있어요.`, yes: '좋아요', no: '이대로 할래요' });
-      if (yes) { stageChanged = stage - 1; break; }
+function showRunItem(i) {
+  const run = state.run;
+  if (!run) return screenHome();
+  const it = run.items[i];
+  const rec = logOf(run, it);
+  run.index = i;
+  const word = wordEl(it.text);
+  const count = h('p', { class: 'plays', 'aria-live': 'polite' });
+  const upd = () => { const n = rec.plays + rec.slow; count.textContent = n ? `들은 횟수 ${n}번` : ' '; };
+  const play = async (slow) => {
+    if (state.run !== run) return;
+    if (slow) rec.slow++; else rec.plays++;
+    upd();
+    word.classList.add('speaking');
+    await speakWord(it.text, slow ? slowRate() : state.settings.rate);
+    word.classList.remove('speaking');
+    if (!run.restNudged && Date.now() - run.startedAt > REST_AFTER_MS) {
+      run.restNudged = true;
+      toast('15분 넘게 연습했어요. 잠깐 쉬었다 해도 좋아요.');
     }
-  }
-
-  session.endedAt = Date.now();
-  if (stageChanged) settings.stage = stageChanged;
-
-  if (session.items.length) {
-    // 재출제 큐 갱신: 통과한 낱말은 빼고, 넘어간 낱말은 넣음
-    const passed = new Set(session.items.filter((x) => x.final === 'pass').map((x) => x.text));
-    const skipped = session.items.filter((x) => x.final === 'skip');
-    const q = (settings.reaskQueue || []).filter((x) => !passed.has(x.text));
-    for (const x of skipped) if (!q.some((y) => y.text === x.text)) q.push({ id: x.id, stage: x.stage, text: x.text, accept: items.find((y) => y.id === x.id)?.accept || [], custom: x.custom });
-    settings.reaskQueue = q.slice(-20);
-
-    await sync.saveSession(state.identity, session);
-    state.sessions.push(session);
-  }
-  await sync.saveSettings(state.identity, settings);
-  flushQuiet();
-
-  if (!session.items.length) return screenHome();
-  return screenSessionEnd(session);
-}
-
-function stageSuggestion() {
-  const st = state.settings;
-  if ((st.suggestAfter || 0) > state.sessions.length) return null;
-  const recent = state.sessions.flatMap((x) => x.items).filter((x) => x.stage === st.stage && !x.custom && x.final !== 'listen').slice(-CONFIG.STAGE_WINDOW);
-  if (recent.length < CONFIG.STAGE_WINDOW) return null;
-  const rate = recent.filter((x) => x.final === 'pass').length / recent.length;
-  if (rate >= CONFIG.STAGE_UP_RATE && st.stage < 6) return st.stage + 1;
-  if (rate <= CONFIG.STAGE_DOWN_RATE && st.stage > 1) return st.stage - 1;
-  return null;
-}
-
-function screenSessionEnd(session) {
-  const done = session.items.length;
-  const passed = session.items.filter((x) => x.final === 'pass').length;
-  const today = sessionsToday();
-  const body = [
-    para(`낱말 ${done}개를 연습했어요.`, 'lead'),
-    passed ? para(`그중 ${passed}개를 또렷하게 말했어요.`) : para('소리 내어 연습한 것만으로도 큰 걸음이에요.'),
-  ];
-  if (today >= CONFIG.DAILY_SESSION_NUDGE) body.push(para('오늘 정말 많이 했어요. 쉬었다가 내일 해요.', 'note'));
-
-  const next = stageSuggestion();
-  const actions = [];
-  if (next) {
-    const up = next > state.settings.stage;
-    body.push(card(
-      h('p', { text: up ? `요즘 아주 잘하고 있어요. "${STAGES[next - 1].name}" 연습을 해 볼까요?` : `"${STAGES[next - 1].name}" 연습을 하면 더 편할 수 있어요. 바꿔 볼까요?` }),
+  };
+  const last = i === run.items.length - 1;
+  screen({
+    guide: `${it.text}. 듣고 소리 내어 따라 말해 보세요. 다시 듣기를 누르면 또 들을 수 있어요.`,
+    body: [
+      h('p', { class: 'progress', text: `${i + 1} / ${run.items.length} · ${run.title}` }),
+      h('div', { class: 'stage-word' }, word),
+      count,
+      h('p', { class: 'small center', text: '듣고 소리 내어 따라 말해 보세요.' }),
+    ],
+    top: [button('그만하기', () => endRun(false), { kind: 'tool', iconName: 'stop' })],
+    className: 'practice',
+    actions: [
       h('div', { class: 'row' },
-        button('좋아요', async () => { state.settings.stage = next; state.settings.suggestAfter = state.sessions.length + 5; await sync.saveSettings(state.identity, state.settings); flushQuiet(); toast('연습 단계를 바꿨어요.'); screenHome(); }),
-        button('이대로 할래요', async () => { state.settings.suggestAfter = state.sessions.length + 5; await sync.saveSettings(state.identity, state.settings); screenHome(); }, { kind: 'secondary' }))));
+        button('다시 듣기', () => play(false), { kind: 'primary', iconName: 'replay' }),
+        button('천천히 듣기', () => play(true), { kind: 'primary', iconName: 'slow' })),
+      h('div', { class: 'row' },
+        button('이전', () => showRunItem(i - 1), { kind: 'secondary', iconName: 'prev', disabled: i === 0 }),
+        button(last ? '끝' : '다음', () => (last ? endRun(true) : showRunItem(i + 1)), { kind: 'secondary', iconName: last ? 'check' : 'next', iconRight: true })),
+    ],
+  });
+  state.fitCurrent = () => fitWord(word);
+  requestAnimationFrame(() => state.fitCurrent?.());
+  upd();
+  // 화면이 열리면 한 번 들려줌
+  sleep(250).then(() => { if (state.run === run && run.index === i && !document.hidden) play(false); });
+}
+
+async function endRun(completed) {
+  const run = state.run;
+  if (!run) return screenHome();
+  const session = await saveRun({ keep: false, completed });
+  if (!completed) return run.back ? run.back() : screenHome();
+  return screenRunEnd(run, session);
+}
+
+function screenRunEnd(run, session) {
+  const n = session ? session.items.length : 0;
+  const plays = session ? session.items.reduce((a, x) => a + x.plays + x.slow, 0) : 0;
+  const what = run.type === 'mixed' ? '낱말·문장' : LABEL[run.type];
+  const body = [para(`${what} ${n}개를 연습했어요. 모두 ${plays}번 들었어요.`, 'lead')];
+  const actions = [];
+  if (run.source === 'today') {
+    const other = run.type === 'word' ? 'sentence' : 'word';
+    body.push(para('더 연습하고 싶으면 분야를 골라 보세요.'));
+    if (!todayDone(other)) actions.push(button(`오늘의 ${LABEL[other]} 하기`, () => startToday(other)));
+    actions.push(h('div', { class: 'row' },
+      button('분야별 낱말', () => screenCategories('word'), { kind: 'secondary' }),
+      button('분야별 문장', () => screenCategories('sentence'), { kind: 'secondary' })));
+  } else {
+    actions.push(button('처음부터 다시', () => startRun({ ...run, start: 0 })));
+    if (run.back) actions.push(button('목록으로', () => run.back(), { kind: 'secondary' }));
   }
-  actions.push(button('한 번 더 할까요?', runSession), button('오늘은 여기까지', screenHome, { kind: 'secondary' }));
-  screen({ guide: `오늘도 해냈어요! ${body.map((n) => n.textContent).join(' ')}`, title: '오늘도 해냈어요!', body, actions });
+  actions.push(button('처음 화면으로', screenHome, { kind: 'secondary' }));
+  screen({ guide: `다 했어요! ${body.map((x) => x.textContent).join(' ')}`, title: '다 했어요!', body, actions });
+}
+
+// ───────────── 오늘의 낱말·문장 (PRD v2.0 F-03) ─────────────
+
+function todayItems(type) {
+  return todaySet(type, sync.dateKey(), state.catalog, type === 'word' ? state.customWords : []);
+}
+
+function todayDone(type) {
+  const today = sync.dateKey();
+  return state.sessions.some((x) => x.source === 'today' && x.type === type && x.completed && sync.dateKey(x.startedAt) === today);
+}
+
+function startToday(type) {
+  startRun({ source: 'today', type, title: `오늘의 ${LABEL[type]}`, items: todayItems(type), back: screenHome });
 }
 
 // ───────────── 홈 ─────────────
@@ -927,67 +763,195 @@ function practiceDays() {
   return new Set(state.sessions.map((x) => sync.dateKey(x.startedAt)));
 }
 
+function itemType(it, session) {
+  return it.type || (session.type === 'word' || session.type === 'sentence' ? session.type : guessType(it.text));
+}
+
+/** 그날 연습한 낱말·문장 (처음 연습한 순서, 중복 없이) */
+function dayItems(key) {
+  const map = new Map();
+  state.sessions
+    .filter((x) => sync.dateKey(x.startedAt) === key)
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .forEach((x) => x.items.forEach((it) => {
+      if (!map.has(it.text)) map.set(it.text, { text: it.text, type: itemType(it, x), category: it.category || '' });
+    }));
+  return [...map.values()];
+}
+
+function dayLabel(key) {
+  const today = sync.dateKey();
+  if (key === today) return '오늘';
+  if (key === sync.dateKey(Date.now() - 86400000)) return '어제';
+  if (key === sync.dateKey(Date.now() - 2 * 86400000)) return '그제';
+  const d = new Date(`${key}T00:00:00`);
+  return `${d.getMonth() + 1}월 ${d.getDate()}일 (${'일월화수목금토'[d.getDay()]})`;
+}
+
+function todayCard(type) {
+  const done = todayDone(type);
+  const n = todayItems(type).length;
+  return h('button', { type: 'button', class: `today${done ? ' done' : ''}`, onclick: () => startToday(type) },
+    h('strong', { text: `오늘의 ${LABEL[type]}` }),
+    h('span', { text: done ? `✓ 다 했어요 · 다시 하기` : `${n}개` }));
+}
+
 async function screenHome() {
   const days = practiceDays().size;
-  const st = STAGES[(state.settings.stage || 1) - 1];
+  const yKey = sync.dateKey(Date.now() - 86400000);
+  const yItems = dayItems(yKey);
   const outbox = await store.count('outbox');
   const notes = [];
   if (outbox > 0 && !navigator.onLine) notes.push(para('인터넷에 연결되면 기록을 안전하게 보관할게요.', 'note'));
   if (outbox > CONFIG.OUTBOX_MAX) notes.push(para('보내지 못한 기록이 많아요. 인터넷에 연결해 주세요.', 'warn'));
-  if (state.env.isIOS) notes.push(h('p', { class: 'note' }, 'Safari 즐겨찾기에 넣어 두면 쉽게 열 수 있어요. ', h('button', { type: 'button', class: 'linkbtn', text: '방법 보기', onclick: () => screenInstall(screenHome) })));
-  if (sessionsToday() >= CONFIG.DAILY_SESSION_NUDGE) notes.push(para('오늘 정말 많이 했어요. 쉬었다가 내일 해요.', 'note'));
+  if (!state.env.standalone && (state.env.isIOS || state.env.isAndroid)) {
+    notes.push(h('p', { class: 'note' }, '홈 화면에 추가하면 앱처럼 화면 전체로 쓸 수 있어요. ', h('button', { type: 'button', class: 'linkbtn', text: '방법 보기', onclick: () => screenInstall(screenHome) })));
+  }
+
+  const past = [];
+  if (yItems.length) past.push(button(`어제 연습 다시 하기 (${yItems.length}개)`, () => screenReviewDay(yKey), { kind: 'secondary', iconName: 'replay' }));
+  if (days > (practiceDays().has(sync.dateKey()) ? 1 : 0)) past.push(button('지난 연습 모두 보기', screenReviewDays, { kind: 'secondary' }));
 
   screen({
-    guide: `${days ? `지금까지 ${days}일 연습했어요. ` : ''}오늘의 연습 버튼을 눌러 시작해요.`,
+    guide: `${days ? `지금까지 ${days}일 연습했어요. ` : ''}오늘의 낱말이나 오늘의 문장을 눌러 시작해요. 다 하고 나면 분야를 골라 더 연습할 수 있어요.`,
     title: days ? `지금까지 ${days}일 연습했어요` : '반가워요',
-    body: [para(`지금 연습: ${st.name}`, 'lead'), notes],
-    actions: [
-      button('오늘의 연습', runSession, { kind: 'hero' }),
+    body: [
+      h('h2', { text: '오늘의 연습' }),
+      h('div', { class: 'today-row' }, todayCard('word'), todayCard('sentence')),
+      h('h2', { text: '더 연습하기' }),
       h('div', { class: 'row' },
-        button('나의 기록', screenDashboard, { kind: 'secondary' }),
-        button('설정', screenSettings, { kind: 'secondary' })),
+        button('분야별 낱말', () => screenCategories('word'), { kind: 'secondary' }),
+        button('분야별 문장', () => screenCategories('sentence'), { kind: 'secondary' })),
+      past.length ? [h('h2', { text: '지난 연습' }), h('div', { class: 'stack' }, past)] : null,
+      notes,
+    ],
+    actions: [h('div', { class: 'row' },
+      button('나의 기록', screenRecords, { kind: 'secondary' }),
+      button('설정', screenSettings, { kind: 'secondary' }))],
+  });
+}
+
+// ───────────── 분야별 연습 ─────────────
+
+function categoriesOf(type) {
+  const list = [];
+  if (type === 'word') list.push({ id: CUSTOM_ID, name: '나만의 낱말', items: state.customWords, custom: true });
+  return list.concat(state.catalog[type]);
+}
+
+function screenCategories(type) {
+  screen({
+    guide: `연습할 ${LABEL[type]} 분야를 골라 주세요.`,
+    title: type === 'word' ? '낱말 분야 고르기' : '문장 상황 고르기',
+    body: [h('div', { class: 'cat-grid' }, categoriesOf(type).map((c) => h('button', {
+      type: 'button', class: `cat${c.custom ? ' custom' : ''}`, onclick: () => screenItemList(type, c.id),
+    },
+    h('strong', { text: c.name }),
+    h('small', { text: c.custom && !c.items.length ? '가족 이름 등을 직접 넣어요' : `${c.items.length}개 · ${c.items.slice(0, 3).join(', ')}` }))))],
+    actions: [button('처음 화면으로', screenHome, { kind: 'secondary' })],
+  });
+}
+
+function screenItemList(type, catId) {
+  const cat = categoriesOf(type).find((c) => c.id === catId);
+  if (!cat) return screenCategories(type);
+  const items = cat.items.map((t) => ({ text: t, type, category: cat.name }));
+  const back = () => screenItemList(type, catId);
+  const start = (i) => startRun({ source: 'category', type, title: cat.name, items, start: i, back });
+  screen({
+    guide: `${cat.name}. ${LABEL[type]}을 누르면 그것부터 연습해요. 처음부터 연습하기를 누르면 차례대로 연습해요.`,
+    title: cat.name,
+    body: [
+      para(`${LABEL[type]}을 누르면 그것부터 연습해요.`, 'small'),
+      cat.custom ? button('나만의 낱말 넣기·빼기', () => screenCustomWords(back), { kind: 'secondary' }) : null,
+      items.length
+        ? h('div', { class: `item-grid${type === 'sentence' ? ' sentences' : ''}` }, items.map((it, i) => h('button', { type: 'button', class: 'item', onclick: () => start(i), text: it.text })))
+        : para('아직 넣은 낱말이 없어요. 위 버튼으로 가족 이름, 자주 가는 곳 등을 넣어 보세요.', 'note'),
+    ],
+    actions: [
+      button('처음부터 연습하기', () => start(0), { disabled: !items.length, iconName: 'replay' }),
+      button('분야 다시 고르기', () => screenCategories(type), { kind: 'secondary' }),
     ],
   });
 }
 
-// ───────────── 나의 기록 (PRD F-07) ─────────────
+// ───────────── 지난 연습 다시 하기 (PRD v2.0 F-03) ─────────────
 
-function dailyRates(days) {
-  const out = [];
-  const byDay = new Map();
-  state.sessions.forEach((x) => x.items.forEach((it) => {
-    if (it.final === 'listen' || it.stage === 1) return;
+function screenReviewDays() {
+  const keys = [...practiceDays()].sort().reverse().slice(0, 90);
+  screen({
+    guide: '다시 연습하고 싶은 날을 골라 주세요.',
+    title: '지난 연습',
+    body: [keys.length
+      ? h('div', { class: 'stack' }, keys.map((k) => {
+        const its = dayItems(k);
+        const w = its.filter((x) => x.type === 'word').length;
+        const s2 = its.filter((x) => x.type === 'sentence').length;
+        return h('button', { type: 'button', class: 'cat', onclick: () => screenReviewDay(k) },
+          h('strong', { text: dayLabel(k) }),
+          h('small', { text: [w ? `낱말 ${w}개` : '', s2 ? `문장 ${s2}개` : ''].filter(Boolean).join(' · ') }));
+      }))
+      : para('아직 연습한 날이 없어요.', 'note')],
+    actions: [button('처음 화면으로', screenHome, { kind: 'secondary' })],
+  });
+}
+
+function screenReviewDay(key) {
+  const its = dayItems(key);
+  const words = its.filter((x) => x.type === 'word');
+  const sentences = its.filter((x) => x.type === 'sentence');
+  const label = dayLabel(key);
+  const back = () => screenReviewDay(key);
+  const run = (type, list) => startRun({ source: 'review', type, title: `${label} ${type === 'mixed' ? '연습' : LABEL[type]}`, items: list, back });
+  const actions = [];
+  if (words.length) actions.push(button(`${label} 낱말 다시 하기 (${words.length}개)`, () => run('word', words), { iconName: 'replay' }));
+  if (sentences.length) actions.push(button(`${label} 문장 다시 하기 (${sentences.length}개)`, () => run('sentence', sentences), { iconName: 'replay' }));
+  if (words.length && sentences.length) actions.push(button('모두 다시 하기', () => run('mixed', its), { kind: 'secondary' }));
+  actions.push(button('다른 날 고르기', screenReviewDays, { kind: 'secondary' }));
+  screen({
+    guide: `${label} 연습한 것을 다시 해 볼까요?`,
+    title: `${label} 연습`,
+    body: [
+      words.length ? [h('h2', { text: '낱말' }), h('div', { class: 'chips' }, words.map((x) => h('span', { class: 'chip', text: x.text })))] : null,
+      sentences.length ? [h('h2', { text: '문장' }), h('div', { class: 'chips' }, sentences.map((x) => h('span', { class: 'chip', text: x.text })))] : null,
+      its.length ? null : para('이날 연습한 기록이 없어요.', 'note'),
+    ],
+    actions,
+  });
+}
+
+// ───────────── 나의 기록 (PRD v2.0 F-07) ─────────────
+
+function playsByDay(days) {
+  const sums = new Map();
+  state.sessions.forEach((x) => {
     const k = sync.dateKey(x.startedAt);
-    if (!byDay.has(k)) byDay.set(k, []);
-    byDay.get(k).push(it.bestRate || 0);
-  }));
+    sums.set(k, (sums.get(k) || 0) + x.items.reduce((a, it) => a + sync.playsOf(it), 0));
+  });
+  const out = [];
   for (let i = days - 1; i >= 0; i--) {
     const k = sync.dateKey(Date.now() - i * 86400000);
-    const v = byDay.get(k);
-    out.push({ k, v: v ? v.reduce((a, b) => a + b, 0) / v.length : null });
+    out.push({ k, v: sums.get(k) || 0 });
   }
   return out;
 }
 
-function lineChart(points) {
-  const W = 360; const H = 200; const L = 34; const R = 12; const T = 14; const B = 30;
+function barChart(points) {
+  const W = 360; const H = 190; const L = 30; const R = 8; const T = 14; const B = 30;
+  const max = Math.max(5, ...points.map((p) => p.v));
   const n = points.length;
-  const x = (i) => L + (n === 1 ? (W - L - R) / 2 : (i * (W - L - R)) / (n - 1));
-  const y = (v) => T + (1 - v) * (H - T - B);
-  const grid = [0, 0.5, 1].map((v) => [
-    s('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'grid' }),
-    s('text', { x: L - 6, y: y(v) + 5, 'text-anchor': 'end', class: 'axis' }, `${v * 100}`),
-  ]);
-  const pts = points.map((p, i) => ({ ...p, i })).filter((p) => p.v !== null);
-  const path = pts.map((p, j) => `${j ? 'L' : 'M'}${x(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join('');
-  const labels = [0, Math.floor((n - 1) / 2), n - 1].map((i, j) => s('text', { x: x(i), y: H - 10, 'text-anchor': ['start', 'middle', 'end'][j], class: 'axis' }, points[i].k.slice(5).replace('-', '/')));
-  return s('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', 'aria-label': '날짜별 알아들은 정도' },
-    grid, labels,
-    pts.length > 1 ? s('path', { d: path, class: 'line' }) : null,
-    pts.map((p) => s('circle', { cx: x(p.i), cy: y(p.v), r: 4.5, class: 'dot' })));
+  const bw = (W - L - R) / n;
+  const y = (v) => T + (1 - v / max) * (H - T - B);
+  const label = (k) => { const d = new Date(`${k}T00:00:00`); return `${d.getMonth() + 1}/${d.getDate()}`; };
+  return s('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', 'aria-label': '날짜별 들은 횟수' },
+    s('line', { x1: L, x2: W - R, y1: y(0), y2: y(0), class: 'grid' }),
+    s('text', { x: L - 6, y: y(max) + 5, 'text-anchor': 'end', class: 'axis' }, String(max)),
+    s('text', { x: L - 6, y: y(0) + 5, 'text-anchor': 'end', class: 'axis' }, '0'),
+    points.map((p, i) => [
+      p.v ? s('rect', { x: L + i * bw + bw * 0.18, y: y(p.v), width: bw * 0.64, height: y(0) - y(p.v), rx: 3, class: 'bar' }) : null,
+      (n <= 7 || i % Math.ceil(n / 7) === 0 || i === n - 1) ? s('text', { x: L + i * bw + bw / 2, y: H - 10, 'text-anchor': 'middle', class: 'axis' }, label(p.k)) : null,
+    ]));
 }
-
-function avg(arr) { const v = arr.filter((p) => p.v !== null).map((p) => p.v); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; }
 
 function calendar() {
   const now = new Date();
@@ -1000,53 +964,48 @@ function calendar() {
   for (let d = 1; d <= last; d++) {
     const k = sync.dateKey(new Date(y, m, d).getTime());
     const on = days.has(k);
-    cells.push(h('div', { class: `cal-day${on ? ' on' : ''}`, 'aria-label': `${m + 1}월 ${d}일${on ? ' 연습함' : ''}` }, h('span', { text: String(d) })));
+    cells.push(on
+      ? h('button', { type: 'button', class: 'cal-day on', 'aria-label': `${m + 1}월 ${d}일 연습함, 다시 하기`, onclick: () => screenReviewDay(k) }, h('span', { text: String(d) }))
+      : h('div', { class: 'cal-day', 'aria-label': `${m + 1}월 ${d}일` }, h('span', { text: String(d) })));
   }
   return h('div', {}, h('p', { class: 'cal-title', text: `${y}년 ${m + 1}월` }), h('div', { class: 'cal' }, cells));
 }
 
-function regainedWords() {
-  const skippedAt = new Map();
-  const out = [];
-  state.sessions.forEach((x) => x.items.forEach((it) => {
-    if (it.final === 'skip' && !skippedAt.has(it.text)) skippedAt.set(it.text, x.startedAt);
-    if (it.final === 'pass' && skippedAt.has(it.text) && skippedAt.get(it.text) < x.startedAt && !out.includes(it.text)) out.push(it.text);
-  }));
-  return out.reverse();
+function topItems(limit = 10) {
+  const sums = new Map();
+  state.sessions.forEach((x) => x.items.forEach((it) => sums.set(it.text, (sums.get(it.text) || 0) + sync.playsOf(it))));
+  return [...sums.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
 }
 
-function screenDashboard(range = 7) {
+function screenRecords(range = 7) {
   const days = practiceDays().size;
-  const series = dailyRates(range);
-  const lastWeek = avg(dailyRates(7));
-  const prevWeek = avg(dailyRates(14).slice(0, 7));
-  let trend = '연습한 날이 쌓이면 변화를 보여 드릴게요.';
-  if (lastWeek !== null && prevWeek !== null) {
-    trend = lastWeek > prevWeek + 0.03 ? '지난주보다 더 잘 알아들었어요.' : '꾸준히 연습하고 있어요.';
-  } else if (lastWeek !== null) trend = '이번 주에도 연습했어요.';
-  const words = regainedWords();
-
-  const body = [
-    h('section', {}, h('h2', { text: '연습 달력' }), para(days ? `지금까지 ${days}일 연습했어요.` : '연습한 날에 도장이 찍혀요.'), calendar()),
-    h('section', {},
-      h('h2', { text: '알아들은 정도' }),
-      para(trend),
-      h('div', { class: 'row' },
-        button('7일', () => screenDashboard(7), { kind: range === 7 ? 'primary' : 'secondary' }),
-        button('30일', () => screenDashboard(30), { kind: range === 30 ? 'primary' : 'secondary' })),
-      lineChart(series),
-      para('세로축: 음성 인식기가 알아들은 정도(0~100). 발음 점수가 아니에요.', 'small')),
-    h('section', {},
-      h('h2', { text: '다시 성공한 낱말' }),
-      words.length
-        ? h('ul', { class: 'wordlist' }, words.map((w) => h('li', {}, h('span', { text: w }), button('듣기', () => speakWord(w), { kind: 'ghost', iconName: 'speaker' }))))
-        : para('예전에 어려웠던 낱말을 다시 성공하면 여기에 모여요.')),
-  ];
+  const series = playsByDay(range);
+  const total = series.reduce((a, p) => a + p.v, 0);
+  const activeDays = series.filter((p) => p.v > 0).length;
+  const top = topItems();
+  const summary = total ? `최근 ${range}일 동안 ${activeDays}일 연습했고, 모두 ${total}번 들었어요.` : `최근 ${range}일 동안 연습한 기록이 없어요.`;
   screen({
-    guide: `${days ? `지금까지 ${days}일 연습했어요. ` : ''}${trend}${words.length ? ` 다시 성공한 낱말이 ${words.length}개 있어요.` : ''}`,
+    guide: `${days ? `지금까지 ${days}일 연습했어요. ` : ''}${summary}`,
     title: '나의 기록',
-    body,
-    actions: [button('처음 화면으로', screenHome, { kind: 'secondary' })],
+    body: [
+      h('section', {}, h('h2', { text: '연습 달력' }), para(days ? `지금까지 ${days}일 연습했어요. 도장이 찍힌 날을 누르면 그날 연습을 다시 할 수 있어요.` : '연습한 날에 도장이 찍혀요.'), calendar()),
+      h('section', {},
+        h('h2', { text: '들은 횟수' }),
+        para(summary),
+        h('div', { class: 'row' },
+          button('7일', () => screenRecords(7), { kind: range === 7 ? 'primary' : 'secondary' }),
+          button('30일', () => screenRecords(30), { kind: range === 30 ? 'primary' : 'secondary' })),
+        barChart(series)),
+      h('section', {},
+        h('h2', { text: '많이 연습한 낱말·문장' }),
+        top.length
+          ? h('ul', { class: 'wordlist' }, top.map(([t, n]) => h('li', {}, h('span', { text: `${t} · ${n}번` }), button('듣기', () => speakWord(t), { kind: 'ghost', iconName: 'speaker' }))))
+          : para('연습하면 여기에 모여요.')),
+    ],
+    actions: [
+      button('지난 연습 다시 하기', screenReviewDays, { kind: 'secondary', iconName: 'replay' }),
+      button('처음 화면으로', screenHome, { kind: 'secondary' }),
+    ],
   });
 }
 
@@ -1070,8 +1029,7 @@ async function screenSettings() {
     body: [
       settingRow('글씨 크기', fontSizeLabel(getFontScale()), button('바꾸기', () => openFontSizePanel(screenSettings), { kind: 'secondary' })),
       settingRow('목소리와 빠르기', null, button('바꾸기', () => screenVoice({ fromSettings: true }), { kind: 'secondary' })),
-      settingRow('연습 단계', STAGES[(st.stage || 1) - 1].name, button('바꾸기', screenStagePicker, { kind: 'secondary' })),
-      settingRow('나만의 낱말', `${state.customWords.length}개`, button('바꾸기', screenCustomWords, { kind: 'secondary' })),
+      settingRow('나만의 낱말', `${state.customWords.length}개`, button('바꾸기', () => screenCustomWords(screenSettings), { kind: 'secondary' })),
       settingRow('이용 횟수 통계 보내기', st.metricsConsent ? '켜짐' : '꺼짐', button(st.metricsConsent ? '끄기' : '켜기', async () => {
         try { await sync.setMetricsConsent(state.identity, !st.metricsConsent); state.settings = await sync.loadSettings(); toast('바꿨어요.'); } catch (e) { toast(errorText(e)); }
         screenSettings();
@@ -1084,25 +1042,13 @@ async function screenSettings() {
       settingRow('내 기록 모두 지우기', '기기와 서버의 기록을 모두 지워요', button('지우기', screenDeleteAll, { kind: 'danger' })),
       disclaimer(),
       h('a', { href: './privacy.html', class: 'link', text: '개인정보 처리방침' }),
-      para(speech.usesOnDevice() ? '음성은 이 기기 안에서 글자로 바꾸고 있어요.' : '음성은 글자로 바꾸기 위해 브라우저 회사 서버로 잠깐 보내져요. 저장하지는 않아요.', 'small'),
+      para('마이크를 쓰지 않으며 목소리를 녹음하지 않아요.', 'small'),
     ],
     actions: [button('처음 화면으로', screenHome, { kind: 'secondary' })],
   });
 }
 
-function screenStagePicker() {
-  screen({
-    guide: '연습 단계를 골라 주세요.',
-    title: '연습 단계',
-    body: [h('div', { class: 'choices col' }, STAGES.map((st) => h('button', {
-      type: 'button', class: `choice${state.settings.stage === st.stage ? ' selected' : ''}`,
-      onclick: async () => { state.settings.stage = st.stage; await sync.saveSettings(state.identity, state.settings); flushQuiet(); screenSettings(); },
-    }, h('span', { text: `${st.stage}. ${st.name}` }), h('small', { text: st.desc }))))],
-    actions: [button('뒤로', screenSettings, { kind: 'secondary' })],
-  });
-}
-
-function screenCustomWords() {
+function screenCustomWords(back = screenSettings) {
   const input = h('input', { type: 'text', maxlength: String(CONFIG.CUSTOM_WORD_MAX_LEN), placeholder: '예: 영희, 시장, 안경', 'aria-label': '추가할 낱말', autocomplete: 'off' });
   const msg = h('p', { class: 'feedback', role: 'status', 'aria-live': 'polite' });
   const list = h('ul', { class: 'wordlist' });
@@ -1128,13 +1074,13 @@ function screenCustomWords() {
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
   render();
   screen({
-    guide: '가족 이름, 자주 가는 곳, 필요한 물건처럼 자주 쓰는 낱말을 넣어 주세요. 넣은 낱말은 연습에 먼저 나와요.',
+    guide: '가족 이름, 자주 가는 곳, 필요한 물건처럼 자주 쓰는 낱말을 넣어 주세요. 오늘의 낱말에도 섞여 나와요.',
     title: '나만의 낱말',
     body: [
-      para('가족 이름, 자주 가는 곳, 필요한 물건을 넣어 주세요. 연습에 먼저 나와요. 잠가서 보관하니 운영자는 볼 수 없어요.', 'lead'),
+      para('가족 이름, 자주 가는 곳, 필요한 물건을 넣어 주세요. 오늘의 낱말에도 섞여 나와요. 잠가서 보관하니 운영자는 볼 수 없어요.', 'lead'),
       h('div', { class: 'row' }, input, button('넣기', add)), msg, list,
     ],
-    actions: [button('뒤로', screenSettings, { kind: 'secondary' })],
+    actions: [button('뒤로', () => back(), { kind: 'secondary' })],
   });
 }
 

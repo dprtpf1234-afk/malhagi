@@ -44,17 +44,22 @@ const ICONS = {
   stop: 'M7 7h10v10H7z',
   check: 'M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z',
   text: 'M9 4v3h5v12h3V7h5V4H9zm-6 8h3v7h3v-7h3V9H3v3z',
+  info: 'M11 7h2v2h-2zm0 4h2v6h-2zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z',
+  replay: 'M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z',
+  slow: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7z',
+  prev: 'M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z',
+  next: 'M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z',
 };
 export function icon(name) {
   return s('svg', { viewBox: '0 0 24 24', width: 28, height: 28, 'aria-hidden': 'true', class: 'icon' },
     s('path', { d: ICONS[name] || '', fill: 'currentColor' }));
 }
 
-export function button(label, onclick, { kind = 'primary', iconName, disabled = false, id } = {}) {
+export function button(label, onclick, { kind = 'primary', iconName, iconRight = false, disabled = false, id } = {}) {
   // 클릭 이벤트 객체가 화면 함수의 인자로 넘어가지 않도록 감쌈
   const handler = onclick ? () => onclick() : undefined;
   return h('button', { type: 'button', class: `btn btn-${kind}`, onclick: handler, disabled, id },
-    iconName ? icon(iconName) : null, h('span', { text: label }));
+    iconName && !iconRight ? icon(iconName) : null, h('span', { text: label }), iconName && iconRight ? icon(iconName) : null);
 }
 
 let toastTimer = null;

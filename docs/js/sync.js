@@ -12,12 +12,16 @@ import {
 export const DEFAULT_SETTINGS = Object.freeze({
   voiceName: '',
   rate: 1.0,
-  stage: null,
-  reaskQueue: [],        // [{id, stage, text, accept}]
   metricsConsent: false,
   consentVersion: '',
   updatedAt: 0,
 });
+
+/** 기록의 한 항목을 들은 횟수 (v2.0 기록은 plays+slow, 예전 v1 기록은 시도 횟수) */
+export function playsOf(item) {
+  if (typeof item.plays === 'number') return item.plays + (item.slow || 0);
+  return Math.max(1, (item.attempts && item.attempts.length) || 1);
+}
 
 // ── 신원 ──
 
@@ -124,9 +128,9 @@ async function todayMetrics() {
   const today = dateKey();
   const sessions = (await loadSessions()).filter((s) => dateKey(s.startedAt) === today);
   let itemsDone = 0;
-  let passed = 0;
-  sessions.forEach((s) => s.items.forEach((it) => { itemsDone++; if (it.final === 'pass') passed++; }));
-  return { date: today, sessions: sessions.length, itemsDone, passed };
+  let plays = 0;
+  sessions.forEach((s) => s.items.forEach((it) => { itemsDone++; plays += playsOf(it); }));
+  return { date: today, sessions: sessions.length, itemsDone, plays };
 }
 
 /** 대기열을 서버로 보냅니다. 실패하면 대기열에 그대로 둡니다. */
@@ -254,7 +258,7 @@ export async function deleteEverything(identity) {
 export async function fetchCurriculum() {
   try {
     const res = await call('curriculum');
-    if (Array.isArray(res.items) && res.items.length) {
+    if (Array.isArray(res.items)) {
       await store.kvSet('curriculum', res.items);
       return res.items;
     }
