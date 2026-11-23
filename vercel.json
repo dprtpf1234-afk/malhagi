@@ -53,6 +53,36 @@
           "value": "no-store"
         }
       ]
+    },
+    {
+      "source": "/download/(.*)\\.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=\"malhagi-jjakkung.apk\""
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "source": "/.well-known/assetlinks.json",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/json"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,72 @@
+# 안드로이드 앱(APK) 만들기
+# android/ 폴더를 고치거나 Actions 탭에서 'Run workflow'를 누르면 실행됩니다.
+# 결과: public/download/malhagi-jjakkung.apk 와 public/.well-known/assetlinks.json 을 저장소에 넣고,
+#       Vercel이 이를 https://malhagi-one.vercel.app/download/malhagi-jjakkung.apk 로 올립니다.
+# 서명 키는 빌드할 때마다 이 컴퓨터(러너) 안에서 새로 만들고 버립니다. 키가 저장소나 어디에도 남지 않습니다.
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+      - '.github/scripts/assetlinks.py'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build release APK (unsigned)
+        working-directory: android
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: gradle --no-daemon assembleRelease
+
+      - name: Sign APK
+        run: |
+          set -euo pipefail
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          PW=$(openssl rand -hex 24)
+          keytool -genkeypair -keystore release.p12 -storetype PKCS12 -alias malhagi \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$PW" -keypass "$PW" -dname "CN=Malhagi Jjakkung, O=Malhagi, C=KR"
+          "$BT/zipalign" -f -p 4 android/app/build/outputs/apk/release/app-release-unsigned.apk aligned.apk
+          mkdir -p public/download
+          "$BT/apksigner" sign --ks release.p12 --ks-type PKCS12 --ks-pass "pass:$PW" --ks-key-alias malhagi \
+            --out public/download/malhagi-jjakkung.apk aligned.apk
+          "$BT/apksigner" verify --print-certs public/download/malhagi-jjakkung.apk
+          keytool -exportcert -keystore release.p12 -storetype PKCS12 -storepass "$PW" -alias malhagi -file cert.der
+          python3 .github/scripts/assetlinks.py cert.der
+          rm -f release.p12 aligned.apk cert.der public/download/*.idsig
+          ls -l public/download
+
+      - name: Commit APK and assetlinks.json
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/download/malhagi-jjakkung.apk public/.well-known/assetlinks.json
+          git commit -m "Android APK build #${{ github.run_number }}"
+          git pull --rebase origin main
+          git push origin HEAD:main

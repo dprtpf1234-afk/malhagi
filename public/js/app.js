@@ -7,7 +7,7 @@ import * as speech from './speech.js';
 import * as words from './words.js';
 import * as backup from './backup.js';
 
-const VERSION = '3.1.0';
+const VERSION = '3.1.1';
 const CONSENT_VERSION = '2026-11-v3';
 const SAMPLE = '사과, 할머니, 물 좀 주세요';
 
@@ -168,6 +168,22 @@ function homeScreenGuide(fromFullscreen = false) {
       env.isIOS ? note('아이폰 Safari는 7일 동안 열지 않은 사이트의 저장 기록을 지울 수 있어요. 홈 화면에 추가해 쓰거나 기록 백업을 켜 두세요.') : null,
     ],
     actions: [{ label: '알겠어요', value: true, kind: 'primary' }],
+  });
+}
+
+function androidAppGuide() {
+  modal({
+    title: '안드로이드 앱 설치하기',
+    body: [
+      h('p', {}, '말하기 짝꿍을 휴대폰 앱으로 설치할 수 있어요. 앱은 이 웹앱을 주소창 없이 열어 주고, 웹앱이 바뀌면 앱도 저절로 새 버전이 돼요.'),
+      h('ol', { class: 'steps' },
+        h('li', {}, "아래 '설치 파일 내려받기'를 누르세요."),
+        h('li', {}, '내려받은 malhagi-jjakkung.apk 파일을 여세요. (알림창이나 \u2018내 파일 → 다운로드\u2019에 있어요)'),
+        h('li', {}, "'출처를 알 수 없는 앱' 허용을 물으면 이 브라우저를 허용하고, '설치'를 누르세요.")),
+      note('Chrome에서 쓰던 기록은 앱에서도 그대로 이어져요. 앱이 소리를 내려면 휴대폰에 Chrome이 있어야 해요.'),
+      h('a', { class: 'btn btn-primary big', href: './download/malhagi-jjakkung.apk', download: 'malhagi-jjakkung.apk' }, '설치 파일 내려받기'),
+    ],
+    actions: [{ label: '닫기', value: true }],
   });
 }
 
@@ -880,7 +896,8 @@ SCREENS.settings = () => {
         backupAvailable() || d.backup.on
           ? row('기록 백업', d.backup.on ? '켜짐' : '꺼짐', () => go('settings-backup'))
           : row('기록 저장·불러오기', '', () => go('settings-backup')),
-        row('홈 화면에 추가하기', '', () => homeScreenGuide(false))),
+        row('홈 화면에 추가하기', '', () => homeScreenGuide(false)),
+        env.isAndroid && !env.standalone ? row('안드로이드 앱 설치하기', '', () => androidAppGuide()) : null),
       h('div', { class: 'rows' },
         h('a', { class: 'row-item', href: './privacy.html', target: '_blank', rel: 'noopener' }, h('span', { class: 'row-label' }, '개인정보 처리방침'), h('span', { class: 'chev', 'aria-hidden': 'true' }, '›')),
         row('모든 기록 지우기', '', () => deleteAll(), 'danger')),

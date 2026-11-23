@@ -1,0 +1,39 @@
+// 말하기 짝꿍 안드로이드 앱 (Trusted Web Activity)
+// 앱은 https://malhagi-one.vercel.app 을 Chrome 엔진으로 주소창 없이 엽니다.
+// 웹앱을 고치면 앱에도 그대로 반영되므로, 이 프로젝트는 주소·이름·아이콘을 바꿀 때만 고치면 됩니다.
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'kr.malhagi.jjakkung'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'kr.malhagi.jjakkung'
+        minSdk 21
+        targetSdk 34
+        versionCode Integer.parseInt(System.getenv('VERSION_CODE') ?: '1')
+        versionName '3.1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}

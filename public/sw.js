@@ -1,6 +1,6 @@
 // 오프라인에서도 연습할 수 있게 화면 파일을 기기에 저장합니다.
 // 백업 서버(/api/)는 저장하지 않습니다. 화면 파일을 고치면 VERSION을 올려 주세요.
-const VERSION = 'v3.1.0';
+const VERSION = 'v3.1.1';
 const CACHE = `malhagi-${VERSION}`;
 const FILES = [
   './',

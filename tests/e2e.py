@@ -228,6 +228,12 @@ with sync_playwright() as p:
 
     # 나만의 낱말
     a.get_by_role('button', name='설정').last.click()
+    expect(a.get_by_role('heading', name='설정')).to_be_visible()
+    check('안드로이드 브라우저에는 앱 설치 안내가 보임', a.get_by_role('button', name=re.compile('안드로이드 앱 설치하기')).count() == 1)
+    click(a, re.compile('안드로이드 앱 설치하기'))
+    check('설치 파일 링크', a.get_by_role('link', name='설치 파일 내려받기').get_attribute('href') == './download/malhagi-jjakkung.apk')
+    a.screenshot(path=f'{SHOTS}/09a-android-app.png')
+    a.get_by_role('dialog').get_by_role('button', name='닫기').click()
     click(a, re.compile('나만의 낱말·문장'))
     a.locator('#new-word').fill('영희')
     click(a, '넣기')
@@ -281,6 +287,7 @@ with sync_playwright() as p:
     stats2 = b.locator('.stat strong').all_inner_texts()
     check('불러온 기록의 들은 횟수가 같음', stats2[2] == f'{total_plays}번', f'{stats2} vs {total_plays}')
     b.get_by_role('button', name='설정').last.click()
+    check('아이폰에는 안드로이드 앱 안내가 없음', b.get_by_role('button', name=re.compile('안드로이드 앱')).count() == 0)
     rows = b.locator('.rows').first.inner_text()
     check('나만의 낱말·문장도 불러옴', '나만의 낱말·문장\n2개' in rows or '2개' in rows, rows)
 
