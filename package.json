@@ -1,0 +1,11 @@
+{
+  "name": "malhagi-jjakkung",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "description": "말하기 짝꿍 – 듣고 따라 말하는 한글 연습 웹앱 (Vercel)",
+  "scripts": {
+    "dev": "node tests/dev-server.js",
+    "test": "node --test tests/*.test.js"
+  }
+}

@@ -1,14 +1,15 @@
 {
   "name": "말하기 짝꿍",
   "short_name": "말하기 짝꿍",
-  "description": "매일 조금씩 소리 내어 연습하는 한글 발음 연습 도구",
+  "description": "낱말과 문장을 듣고 따라 말하며 매일 조금씩 연습하는 한글 발음 연습 도구",
   "lang": "ko",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#FDFBF7",
-  "theme_color": "#FDFBF7",
+  "background_color": "#FBF8F3",
+  "theme_color": "#FBF8F3",
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }

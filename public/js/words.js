@@ -1,7 +1,7 @@
-// 낱말·문장 단어장 (PRD v2.0 F-03)
+// 단어장과 '오늘의 낱말·문장' 고르기
 // ※ 아래 목록은 개발용 초안입니다. 출시 전 언어재활사 검수를 거쳐 주세요.
-//   운영 중에는 GAS 데이터 시트의 'curriculum' 탭에 넣으면 이 목록 대신 사용됩니다
-//   (열: item_id, type(word/sentence), category, text, reviewed_by, active).
+//   고치려면 이 파일의 목록을 바꾸면 됩니다. (GitHub에서 고치면 Vercel이 자동으로 다시 올립니다)
+//   항목 번호는 '분야 + 글자'로 정해지므로, 글자를 바꾸면 그 항목은 새 항목으로 기록됩니다.
 
 export const WORD_CATEGORIES = [
   { id: 'family', name: '가족·사람', items: ['엄마', '아빠', '할머니', '할아버지', '아들', '딸', '남편', '아내', '형', '누나', '오빠', '언니', '동생', '손자', '손녀', '친구', '이웃', '선생님'] },
@@ -29,31 +29,31 @@ export const SENTENCE_CATEGORIES = [
   { id: 'daily', name: '시간·날씨', items: ['오늘 날씨가 좋아요', '비가 와요', '추워요', '더워요', '지금 몇 시예요?', '오늘이 무슨 요일이에요?', '좋은 아침이에요', '내일 만나요', '주말에 봐요', '눈이 와요'] },
 ];
 
-export const CUSTOM_ID = 'custom';
-export const TODAY_WORDS = 10;
-export const TODAY_SENTENCES = 5;
+export const TODAY_SIZE = Object.freeze({ word: 10, sentence: 5 });
+const TODAY_MINE = Object.freeze({ word: 3, sentence: 2 }); // 오늘의 목록에 넣는 나만의 낱말·문장 최대 수
 
-/** 서버 단어장(있으면)으로 분야 목록 만들기. 형식이 맞는 항목이 없으면 기본 목록. */
-export function buildCatalog(serverItems) {
-  const valid = (serverItems || []).filter((x) => x && (x.type === 'word' || x.type === 'sentence') && x.category && x.text);
-  const fromServer = (type) => {
-    const map = new Map();
-    valid.filter((x) => x.type === type).forEach((x) => {
-      if (!map.has(x.category)) map.set(x.category, { id: `s-${map.size}`, name: x.category, items: [] });
-      const cat = map.get(x.category);
-      if (!cat.items.includes(x.text)) cat.items.push(x.text);
-    });
-    return [...map.values()];
-  };
-  const words = fromServer('word');
-  const sentences = fromServer('sentence');
-  return {
-    word: words.length ? words : WORD_CATEGORIES,
-    sentence: sentences.length ? sentences : SENTENCE_CATEGORIES,
-  };
+export const MY_CATEGORY = Object.freeze({ word: '나만의 낱말', sentence: '나만의 문장' });
+
+/** 분야 목록 + 항목 (항목: { id, t, k, c }) */
+export function categories(type) {
+  const src = type === 'word' ? WORD_CATEGORIES : SENTENCE_CATEGORIES;
+  const p = type === 'word' ? 'w' : 's';
+  return src.map((c) => ({
+    id: c.id,
+    name: c.name,
+    items: c.items.map((t) => ({ id: `${p}:${c.id}:${t}`, t, k: type, c: c.name })),
+  }));
 }
 
-// 날짜로 정해지는 섞기: 같은 날에는 어느 기기에서 열어도 같은 '오늘의 낱말·문장'
+/** 나만의 낱말·문장 (지운 것 제외, 넣은 순서대로) */
+export function myItems(myWords, type) {
+  return Object.entries(myWords || {})
+    .filter(([, w]) => !w.del && w.k === type && w.t)
+    .sort((a, b) => a[1].at - b[1].at)
+    .map(([id, w]) => ({ id, t: w.t, k: type, c: MY_CATEGORY[type] }));
+}
+
+// 날짜로 정해지는 섞기: 같은 날에는 같은 목록
 function seeded(seedText) {
   let h = 2166136261;
   for (const ch of seedText) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
@@ -65,7 +65,7 @@ function seeded(seedText) {
   };
 }
 
-function seededShuffle(arr, rand) {
+function shuffle(arr, rand) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
@@ -75,36 +75,30 @@ function seededShuffle(arr, rand) {
 }
 
 /**
- * 오늘의 낱말·문장 (PRD v2.0 F-03).
- * 낱말: 여러 분야에서 고루 뽑고, 나만의 낱말이 있으면 최대 3개를 넣음.
- * 문장: 여러 상황에서 고루 뽑음.
- * @returns {{text:string, type:'word'|'sentence', category:string}[]}
+ * 오늘의 낱말(10개)·문장(5개).
+ * 나만의 낱말·문장을 먼저 몇 개 넣고, 나머지는 분야를 돌아가며 하나씩 뽑아 고루 섞습니다.
+ * recent: 최근 며칠 동안 이미 오늘의 목록에 나온 항목 id (되도록 다시 고르지 않음)
  */
-export function todaySet(type, dateKey, catalog, customWords = []) {
-  const rand = seeded(`${type}|${dateKey}`);
-  const cats = catalog[type];
-  const size = type === 'word' ? TODAY_WORDS : TODAY_SENTENCES;
+export function pickToday(type, key, myWords, recent = new Set()) {
+  const rand = seeded(`${type}|${key}`);
+  const size = TODAY_SIZE[type];
   const out = [];
   const used = new Set();
-  if (type === 'word') {
-    seededShuffle(customWords, rand).slice(0, 3).forEach((t) => { used.add(t); out.push({ text: t, type, category: '나만의 낱말' }); });
-  }
-  // 분야를 돌아가며 하나씩 뽑아 고루 섞음
-  const pools = seededShuffle(cats, rand).map((c) => ({ name: c.name, items: seededShuffle(c.items, rand) }));
-  let guard = 0;
-  while (out.length < size && guard++ < 500) {
-    let added = false;
-    for (const p of pools) {
-      if (out.length >= size) break;
-      const t = p.items.find((x) => !used.has(x));
-      if (t) { used.add(t); out.push({ text: t, type, category: p.name }); added = true; }
+  const take = (it) => { used.add(it.id); used.add(`${type}|${it.t}`); out.push(it); };
+  const fresh = (it) => !used.has(it.id) && !used.has(`${type}|${it.t}`);
+
+  shuffle(myItems(myWords, type), rand).slice(0, TODAY_MINE[type]).forEach(take);
+  const pools = shuffle(categories(type), rand).map((c) => shuffle(c.items, rand));
+  for (const avoidRecent of [true, false]) {
+    let added = true;
+    while (out.length < size && added) {
+      added = false;
+      for (const pool of pools) {
+        if (out.length >= size) break;
+        const it = pool.find((x) => fresh(x) && !(avoidRecent && recent.has(x.id)));
+        if (it) { take(it); added = true; }
+      }
     }
-    if (!added) break;
   }
   return out;
-}
-
-/** 문장인지 낱말인지 (예전 기록처럼 type이 없을 때 추정) */
-export function guessType(text) {
-  return /\s|[?!.]$|요$|니다$/.test(text) && text.length > 2 ? 'sentence' : 'word';
 }
