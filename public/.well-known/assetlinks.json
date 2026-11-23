@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "kr.malhagi.jjakkung",
+      "sha256_cert_fingerprints": [
+        "4E:3E:C2:79:FC:65:77:99:E9:53:FC:44:25:43:FC:D6:14:48:F2:8D:5E:5E:57:48:C4:7B:73:82:31:6D:F1:3D"
+      ]
+    }
+  }
+]
