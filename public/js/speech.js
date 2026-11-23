@@ -24,36 +24,9 @@ function installAndroidVoice(b) {
   const synth = {
     speaking: false,
     pending: false,
+    // 앱에서는 휴대폰 기본 목소리(Chrome과 같은 소리) 하나만 씀. 기기의 다른 목소리는 품질이 고르지 않아 보여 주지 않음
     getVoices() {
-      let raw = [];
-      try { raw = JSON.parse(b.voices() || '[]'); } catch { raw = []; }
-      // 음질 등급(높을수록 좋음) → 온라인(대개 더 자연스러움) 순으로 정렬. 맨 앞 목소리를 기본으로 씀
-      const voices = raw.filter((v) => !v.isDefault).sort((x, y) =>
-        (Number(y.quality) || 0) - (Number(x.quality) || 0) || Number(x.localService !== false) - Number(y.localService !== false));
-      const count = { local: 0, net: 0 };
-      const out = voices.map((v, i) => {
-        const local = v.localService !== false;
-        const k = local ? 'local' : 'net';
-        count[k] += 1;
-        const high = (Number(v.quality) || 0) >= 400;
-        return {
-          name: `${high ? '고품질 ' : ''}${local ? '기기' : '온라인'} 목소리 ${count[k]}`,
-          lang: String(v.lang || 'ko-KR'),
-          voiceURI: String(v.voiceURI || v.name || ''),
-          localService: local,
-          default: i === 0,
-        };
-      });
-      const d = raw.find((v) => v.isDefault);
-      if (d) out.push({ name: `휴대폰 기본 목소리${d.engine ? ` (${d.engine})` : ''}`, lang: 'ko-KR', voiceURI: '__default__', localService: true, default: out.length === 0 });
-      return out;
-    },
-    /** 설치된 음성 엔진 (앱 전용) */
-    engines() {
-      try { return JSON.parse(b.engines ? b.engines() : '[]'); } catch { return []; }
-    },
-    setEngine(pkg) {
-      try { return !!(b.setEngine && b.setEngine(pkg)); } catch { return false; }
+      return [{ name: '휴대폰 기본 목소리', lang: 'ko-KR', voiceURI: '__default__', localService: true, default: true }];
     },
     addEventListener() {},
     removeEventListener() {},

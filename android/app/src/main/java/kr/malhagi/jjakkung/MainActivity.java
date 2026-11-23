@@ -57,8 +57,8 @@ public class MainActivity extends Activity {
     /** Chrome과 같은 방식: 특정 목소리를 고르지 않고, 휴대폰 설정의 기본 한국어 목소리를 씀 */
     private static final String DEFAULT_VOICE = "__default__";
     private static final Locale KOREAN = Locale.KOREA; // ko-KR (Chrome이 쓰는 값과 같음)
-    /** 고품질 한국어 목소리가 있는 Google 음성 엔진을 먼저 씀 (없으면 휴대폰 기본 엔진) */
-    private static final String GOOGLE_TTS = "com.google.android.tts";
+    /** 엔진을 따로 고르지 않으면 휴대폰 기본 엔진을 씀 (Chrome과 같은 소리) */
+    private static final String SYSTEM_ENGINE = "";
     private static final String PREFS = "malhagi";
 
     private WebView web;
@@ -67,7 +67,7 @@ public class MainActivity extends Activity {
     private volatile boolean ttsReady = false;
     private volatile boolean immersive = false;
     private ValueCallback<Uri[]> fileCallback;
-    private String enginePkg = GOOGLE_TTS;
+    private String enginePkg = SYSTEM_ENGINE;
     /** 인터넷 목소리로 읽는 중인 문장: 실패하면 기본 목소리로 다시 읽음 */
     private final Map<String, String[]> networkUtterances = new ConcurrentHashMap<>();
 
@@ -116,14 +116,14 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
         s.setSupportMultipleWindows(false);
-        s.setUserAgentString(s.getUserAgentString() + " MalhagiApp/3.3.0");
+        s.setUserAgentString(s.getUserAgentString() + " MalhagiApp/3.3.1");
 
         web.addJavascriptInterface(new Bridge(), "MalhagiAndroid");
         web.setWebViewClient(new Client());
         web.setWebChromeClient(new Chrome());
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        initTts(prefs.getString("tts_engine", GOOGLE_TTS));
+        initTts(prefs.getString("tts_engine_v2", SYSTEM_ENGINE));
 
         if (savedInstanceState != null) web.restoreState(savedInstanceState);
         else web.loadUrl(HOME);
@@ -294,29 +294,34 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** 음성 엔진 켜기 (요청한 엔진이 없으면 안드로이드가 휴대폰 기본 엔진을 씀) */
+    /** 음성 엔진 켜기 (빈 값이면 휴대폰 기본 엔진, 요청한 엔진이 없어도 기본 엔진) */
     private void initTts(String engine) {
         ttsReady = false;
         networkUtterances.clear();
         if (tts != null) {
             try { tts.shutdown(); } catch (Exception ignored) { }
         }
-        enginePkg = engine;
+        enginePkg = engine == null ? SYSTEM_ENGINE : engine;
         final TextToSpeech[] holder = new TextToSpeech[1];
-        holder[0] = new TextToSpeech(getApplicationContext(), status -> {
+        TextToSpeech.OnInitListener onInit = status -> {
             TextToSpeech t = holder[0];
             if (status != TextToSpeech.SUCCESS || t == null || t != tts) return;
             t.setLanguage(KOREAN);
             t.setOnUtteranceProgressListener(progress);
             ttsReady = true;
-        }, engine);
+        };
+        holder[0] = enginePkg.isEmpty()
+                ? new TextToSpeech(getApplicationContext(), onInit)
+                : new TextToSpeech(getApplicationContext(), onInit, enginePkg);
         tts = holder[0];
     }
 
     /** 지금 쓰는 엔진의 패키지 이름 */
     private String currentEngine() {
         try {
-            for (TextToSpeech.EngineInfo e : tts.getEngines()) if (e.name.equals(enginePkg)) return enginePkg;
+            if (!enginePkg.isEmpty()) {
+                for (TextToSpeech.EngineInfo e : tts.getEngines()) if (e.name.equals(enginePkg)) return enginePkg;
+            }
             String d = tts.getDefaultEngine();
             return d == null ? "" : d;
         } catch (Exception e) {
@@ -451,7 +456,7 @@ public class MainActivity extends Activity {
                 for (TextToSpeech.EngineInfo e : tts.getEngines()) if (e.name.equals(pkg)) found = true;
             } catch (Exception ignored) { }
             if (!found) return false;
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("tts_engine", pkg).apply();
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("tts_engine_v2", pkg).apply();
             runOnUiThread(() -> initTts(pkg));
             return true;
         }

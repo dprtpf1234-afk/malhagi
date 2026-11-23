@@ -7,7 +7,7 @@ import * as speech from './speech.js';
 import * as words from './words.js';
 import * as backup from './backup.js';
 
-const VERSION = '3.4.0';
+const VERSION = '3.4.1';
 const CONSENT_VERSION = '2026-11-v3';
 const SAMPLE = '사과, 할머니, 물 좀 주세요';
 const RATE_SAMPLE = '물 좀 주세요';
@@ -461,28 +461,6 @@ function voicePanel({ onDone, doneLabel }) {
     })));
   drawRates();
 
-  // 앱 안: 음성 엔진 고르기 (Google·삼성 등 두 개 이상 있을 때만)
-  const engineBox = h('div', {});
-  const synth = globalThis.speechSynthesis;
-  const drawEngines = () => {
-    const list = env.isApp && synth && synth.engines ? synth.engines() : [];
-    if (list.length < 2) { engineBox.replaceChildren(); return; }
-    engineBox.replaceChildren(
-      h('h2', {}, '음성 엔진'),
-      h('p', { class: 'small-text' }, '엔진마다 목소리가 달라요. 고품질 목소리는 대개 Google 엔진에 있어요.'),
-      h('div', { class: 'choices' }, list.map((e) => choice(e.label || e.pkg, !!e.current, () => {
-        if (e.current || !synth.setEngine(e.pkg)) return;
-        store.setDevice({ voice: '' });
-        list.forEach((x) => { x.current = x.pkg === e.pkg; });
-        engineBox.querySelectorAll('.choice').forEach((b, i) => {
-          b.classList.toggle('on', list[i].current);
-          b.setAttribute('aria-pressed', list[i].current ? 'true' : 'false');
-        });
-        setTimeout(() => drawVoices(true), 1200);
-      }))));
-  };
-  drawEngines();
-
   async function drawVoices(refresh = false) {
     list.replaceChildren(note('목소리를 찾고 있어요…'));
     const voices = await speech.getVoices({ refresh });
@@ -497,26 +475,45 @@ function voicePanel({ onDone, doneLabel }) {
       speech.speak(SAMPLE, { voice: v.voiceURI || v.name, rate: dev().rate });
     })));
   }
-  drawVoices();
 
   const autoplay = h('input', { type: 'checkbox', id: 'autoplay', checked: dev().autoplay ? true : null, onchange: (e) => store.setDevice({ autoplay: e.target.checked }) });
 
-  const guide = env.isIOS
-    ? ['설정 → 손쉬운 사용 → 읽기 및 말하기(또는 음성 콘텐츠) → 음성 → 한국어로 들어가세요.', "이름 옆에 '향상된 음질'이나 '고품질'이 붙은 목소리를 내려받으세요.", '이 화면으로 돌아와 ‘목소리 다시 찾기’를 누르세요.']
-    : ['휴대폰 설정에서 ‘텍스트 음성 변환’을 검색하세요. (일반 관리 → 언어 및 입력 안에 있기도 해요)', "기본 엔진을 'Google 음성 인식 및 합성'으로 고르고, 그 설정에서 ‘음성 데이터 설치’ → 한국어를 내려받으세요.", '이 화면으로 돌아와 ‘목소리 다시 찾기’를 누르세요.'];
-
-  return [
-    !env.tts ? note('이 브라우저에서는 소리를 낼 수 없어요. 안드로이드는 Chrome, 아이폰은 Safari로 열어 주세요.', 'warn') : null,
-    engineBox,
-    h('h2', {}, '목소리'),
-    env.isApp ? h('p', { class: 'small-text' }, '맨 위가 가장 음질이 좋은 목소리예요. \u2018온라인\u2019 목소리는 인터넷이 필요하고, 끊기면 기기 목소리로 읽어요.') : null,
-    list,
-    h('div', { class: 'row' },
-      btn('들어 보기', () => speech.speak(SAMPLE, { voice: dev().voice, rate: dev().rate }), { kind: 'primary' }),
-      btn('목소리 다시 찾기', () => drawVoices(true))),
+  const sampleBtn = btn('들어 보기', () => speech.speak(SAMPLE, { voice: dev().voice, rate: dev().rate }), { kind: 'primary' });
+  const common = [
     h('h2', {}, '빠르기'),
     rates,
     h('label', { class: 'check', for: 'autoplay' }, autoplay, h('span', {}, '낱말이 나오면 자동으로 한 번 들려주기')),
+  ];
+
+  // 안드로이드 앱: 휴대폰 기본 목소리(Chrome에서 듣던 소리) 하나만 씀
+  if (env.isApp) {
+    return [
+      h('h2', {}, '목소리'),
+      h('p', {}, '휴대폰에 기본으로 정해진 목소리로 읽어요. Chrome에서 듣던 소리와 같아요.'),
+      h('div', { class: 'row' }, sampleBtn),
+      ...common,
+      h('details', { class: 'card' }, h('summary', {}, '목소리를 바꾸고 싶을 때'),
+        h('p', {}, '앱은 휴대폰 설정의 \u2018텍스트 음성 변환\u2019 목소리를 그대로 써요. 거기서 바꾸면 앱 목소리도 바뀌어요.'),
+        h('ol', { class: 'steps' },
+          h('li', {}, '휴대폰 설정 맨 위 검색(돋보기)에 \u2018텍스트 음성 변환\u2019을 입력해 들어가세요. (삼성: 설정 → 일반 → 텍스트 음성 변환)'),
+          h('li', {}, '\u2018기본 엔진\u2019(또는 \u2018선호하는 엔진\u2019)에서 엔진을 고르세요. 엔진 옆 톱니바퀴를 누르면 한국어 목소리를 고르거나 내려받을 수 있어요.'),
+          h('li', {}, '그 화면의 \u2018듣기\u2019(재생)로 소리를 확인한 뒤, 이 앱으로 돌아와 \u2018들어 보기\u2019를 누르세요.')),
+        h('p', { class: 'small-text' }, '휴대폰마다 메뉴 이름이 조금 다를 수 있어요.')),
+      h('div', { class: 'actions' }, btn(doneLabel, onDone, { kind: 'primary', cls: 'big' })),
+    ];
+  }
+
+  drawVoices();
+  const guide = env.isIOS
+    ? ['설정 → 손쉬운 사용 → 읽기 및 말하기(또는 음성 콘텐츠) → 음성 → 한국어로 들어가세요.', "이름 옆에 '향상된 음질'이나 '고품질'이 붙은 목소리를 내려받으세요.", '이 화면으로 돌아와 \u2018목소리 다시 찾기\u2019를 누르세요.']
+    : ['휴대폰 설정에서 \u2018텍스트 음성 변환\u2019을 검색하세요. (일반 관리 → 언어 및 입력 안에 있기도 해요)', "기본 엔진을 'Google 음성 인식 및 합성'으로 고르고, 그 설정에서 \u2018음성 데이터 설치\u2019 → 한국어를 내려받으세요.", '이 화면으로 돌아와 \u2018목소리 다시 찾기\u2019를 누르세요.'];
+
+  return [
+    !env.tts ? note('이 브라우저에서는 소리를 낼 수 없어요. 안드로이드는 Chrome, 아이폰은 Safari로 열어 주세요.', 'warn') : null,
+    h('h2', {}, '목소리'),
+    list,
+    h('div', { class: 'row' }, sampleBtn, btn('목소리 다시 찾기', () => drawVoices(true))),
+    ...common,
     h('details', { class: 'card' }, h('summary', {}, '더 또렷한 목소리 설치하기'),
       h('p', {}, '앱은 휴대폰에 설치된 목소리를 그대로 써요. 기기의 기본 목소리가 어색하면 더 좋은 한국어 목소리를 설치해 보세요.'),
       h('ol', { class: 'steps' }, guide.map((g) => h('li', {}, g))),
@@ -1224,8 +1221,8 @@ async function deleteAll() {
 
 applyFontScale(getFontScale(), { save: false });
 store.load();
-// 앱 3.3: 예전에 고른 목소리 대신 가장 좋은 음질의 목소리가 자동으로 골라지도록 한 번 되돌림
-if (env.isApp && !store.device().voiceReset330) store.setDevice({ voice: '', voiceReset330: true });
+// 앱 3.3.1: 기본값을 '휴대폰 기본 목소리'(Chrome과 같은 소리)로 한 번 되돌림
+if (env.isApp && !store.device().voiceReset331) store.setDevice({ voice: '', voiceReset331: true });
 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   navigator.serviceWorker.register('./sw.js').catch(() => { /* 오프라인 기능만 빠짐 */ });
