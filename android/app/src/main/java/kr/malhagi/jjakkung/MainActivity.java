@@ -414,9 +414,9 @@ public class MainActivity extends Activity {
                 Voice v = DEFAULT_VOICE.equals(voiceName) ? null : findVoice(voiceName);
                 if (v != null) tts.setVoice(v);
                 else tts.setLanguage(KOREAN); // 기본 목소리로 되돌림
-                float r = Math.max(0.3f, Math.min(2f, rate));
-                tts.setSpeechRate(r);
-                if (v != null && v.isNetworkConnectionRequired()) networkUtterances.put(id, new String[] { text, String.valueOf(r) });
+                float speed = Math.max(0.3f, Math.min(2f, rate));
+                tts.setSpeechRate(speed);
+                if (v != null && v.isNetworkConnectionRequired()) networkUtterances.put(id, new String[] { text, String.valueOf(speed) });
                 int r = tts.speak(text, TextToSpeech.QUEUE_FLUSH, new Bundle(), id);
                 if (r != TextToSpeech.SUCCESS) notifySpeech(id, "error");
             } catch (Exception e) {
