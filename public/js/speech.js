@@ -27,13 +27,33 @@ function installAndroidVoice(b) {
     getVoices() {
       let raw = [];
       try { raw = JSON.parse(b.voices() || '[]'); } catch { raw = []; }
-      return raw.map((v) => ({
-        name: v.localService === false ? '인터넷 목소리' : '휴대폰 목소리',
-        lang: String(v.lang || 'ko-KR'),
-        voiceURI: String(v.voiceURI || v.name || ''),
-        localService: v.localService !== false,
-        default: false,
-      }));
+      // 음질 등급(높을수록 좋음) → 온라인(대개 더 자연스러움) 순으로 정렬. 맨 앞 목소리를 기본으로 씀
+      const voices = raw.filter((v) => !v.isDefault).sort((x, y) =>
+        (Number(y.quality) || 0) - (Number(x.quality) || 0) || Number(x.localService !== false) - Number(y.localService !== false));
+      const count = { local: 0, net: 0 };
+      const out = voices.map((v, i) => {
+        const local = v.localService !== false;
+        const k = local ? 'local' : 'net';
+        count[k] += 1;
+        const high = (Number(v.quality) || 0) >= 400;
+        return {
+          name: `${high ? '고품질 ' : ''}${local ? '기기' : '온라인'} 목소리 ${count[k]}`,
+          lang: String(v.lang || 'ko-KR'),
+          voiceURI: String(v.voiceURI || v.name || ''),
+          localService: local,
+          default: i === 0,
+        };
+      });
+      const d = raw.find((v) => v.isDefault);
+      if (d) out.push({ name: `휴대폰 기본 목소리${d.engine ? ` (${d.engine})` : ''}`, lang: 'ko-KR', voiceURI: '__default__', localService: true, default: out.length === 0 });
+      return out;
+    },
+    /** 설치된 음성 엔진 (앱 전용) */
+    engines() {
+      try { return JSON.parse(b.engines ? b.engines() : '[]'); } catch { return []; }
+    },
+    setEngine(pkg) {
+      try { return !!(b.setEngine && b.setEngine(pkg)); } catch { return false; }
     },
     addEventListener() {},
     removeEventListener() {},
@@ -86,7 +106,8 @@ let voicesCache = null;
 
 const isKorean = (v) => /^ko([-_]|$)/i.test(v.lang || '') || /한국|korean/i.test(v.name || '');
 // 고품질(향상된·프리미엄·신경망) 목소리를 앞에, 기기 안에서 만드는 목소리를 그다음에
-const quality = (v) => (/premium|enhanced|neural|natural|향상|고품질|프리미엄/i.test(v.name) ? 2 : 0) + (v.localService !== false ? 1 : 0);
+// 기본 목소리(앱의 '기본 목소리' 포함) → 고품질(향상된·프리미엄·신경망) → 기기 안에서 만드는 목소리 순
+const quality = (v) => (v.default ? 4 : 0) + (/premium|enhanced|neural|natural|향상|고품질|프리미엄/i.test(v.name) ? 2 : 0) + (v.localService !== false ? 1 : 0);
 
 function readVoices() {
   try {

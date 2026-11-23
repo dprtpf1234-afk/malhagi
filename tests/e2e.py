@@ -50,12 +50,17 @@ Element.prototype.webkitRequestFullscreen = undefined;
 
 FAKE_ANDROID_APP = """
 (() => {
-  window.__bridge = { spoken: [], saved: [], full: false, stopped: 0 };
+  window.__bridge = { spoken: [], saved: [], full: false, stopped: 0, engineSet: '',
+    engines: [{ pkg: 'com.google.android.tts', label: 'Google', current: true }, { pkg: 'com.samsung.SMT', label: '삼성', current: false }] };
   window.MalhagiAndroid = {
     ready: () => true,
     voices: () => JSON.stringify([
-      { name: 'ko-kr-x-ism-local', voiceURI: 'ko-kr-x-ism-local', lang: 'ko-KR', localService: true },
-      { name: 'ko-kr-x-kob-network', voiceURI: 'ko-kr-x-kob-network', lang: 'ko-KR', localService: false }]),
+      { name: '__default__', voiceURI: '__default__', lang: 'ko-KR', localService: true, isDefault: true, engine: 'Google' },
+      { name: 'ko-kr-x-ism-local', voiceURI: 'ko-kr-x-ism-local', lang: 'ko-KR', localService: true, quality: 300 },
+      { name: 'ko-kr-x-kob-network', voiceURI: 'ko-kr-x-kob-network', lang: 'ko-KR', localService: false, quality: 400 },
+      { name: 'ko-kr-x-koc-local', voiceURI: 'ko-kr-x-koc-local', lang: 'ko-KR', localService: true, quality: 400 }]),
+    engines: () => JSON.stringify(window.__bridge.engines),
+    setEngine: (pkg) => { window.__bridge.engines.forEach((e) => { e.current = e.pkg === pkg; }); window.__bridge.engineSet = pkg; return true; },
     speak: (id, text, rate, voice) => { window.__bridge.spoken.push({ id, text, rate, voice }); setTimeout(() => window.__malhagiTts(id, 'end'), 30); },
     stop: () => { window.__bridge.stopped++; },
     speaking: () => false,
@@ -136,8 +141,10 @@ with sync_playwright() as p:
     expect(a.get_by_role('button', name=re.compile('목소리 2 · Google 한국의'))).to_be_visible()
     click(a, re.compile('목소리 2'))
     click(a, '조금 천천히')
+    wait_js(a, "window.__spoken.some(s => s.text === '물 좀 주세요.' && s.rate === 0.9)")
+    check('웹: 빠르기를 고르면 그 빠르기로 짧은 문장을 읽어 줌', True)
     click(a, '들어 보기')
-    wait_js(a, 'window.__spoken.length >= 2')
+    wait_js(a, "window.__spoken.at(-1).text.startsWith('사과')")
     last = a.evaluate('window.__spoken.at(-1)')
     check('들어 보기: 고른 목소리·빠르기, 끝에 마침표', last == {'text': '사과, 할머니, 물 좀 주세요.', 'rate': 0.9, 'voice': 'google-ko'}, json.dumps(last, ensure_ascii=False))
     a.screenshot(path=f'{SHOTS}/02-voice.png', full_page=True)
@@ -227,6 +234,13 @@ with sync_playwright() as p:
     expect(a.get_by_role('heading', name='교통·이동')).to_be_visible()
     check('묶음 화면에 들은 묶음 표시 (1~10, 11~20)', a.locator('.set.done').count() + a.locator('.set.part').count() == 2 and a.locator('.set').nth(1).get_attribute('class') != 'set', str([a.locator('.set').nth(i).get_attribute('class') for i in range(3)]))
     check('가장 큰 글씨 묶음 화면이 넘치지 않음', no_overflow(a))
+    a.get_by_role('button', name='홈', exact=True).click()
+
+    a.get_by_role('button', name='홈', exact=True).click()
+    click(a, '분야별 문장')
+    click(a, re.compile('^도움 요청'))
+    expect(a.get_by_role('heading', name='도움 요청')).to_be_visible()
+    check('문장 분야도 50개를 10개씩 5묶음', a.locator('.set').count() == 5 and '50개' in a.locator('main .sub').inner_text())
     a.get_by_role('button', name='홈', exact=True).click()
 
     # 글씨 크기 창
@@ -441,12 +455,25 @@ with sync_playwright() as p:
     click(g, '다음')
     click(g, re.compile('시작하기$'))
     expect(g.get_by_role('heading', name='목소리와 빠르기')).to_be_visible()
-    expect(g.get_by_role('button', name='목소리 1 · 휴대폰 목소리')).to_be_visible()
-    expect(g.get_by_role('button', name='목소리 2 · 인터넷 목소리')).to_be_visible()
+    expect(g.get_by_role('button', name='목소리 1 · 고품질 온라인 목소리 1')).to_be_visible()
+    names = g.locator('.choices.col .choice').all_inner_texts()
+    check('앱: 음질 높은 순서 (고품질 온라인 → 고품질 기기 → 기기 → 휴대폰 기본)', [n.replace('✓ ', '') for n in names] == ['목소리 1 · 고품질 온라인 목소리 1', '목소리 2 · 고품질 기기 목소리 1', '목소리 3 · 기기 목소리 2', '목소리 4 · 휴대폰 기본 목소리 (Google)'], str(names))
+    check('앱: 가장 좋은 목소리가 골라져 있음', g.get_by_role('button', name='목소리 1 · 고품질 온라인 목소리 1').get_attribute('aria-pressed') == 'true')
+    check('앱: 음성 엔진 고르기 (Google·삼성)', g.get_by_role('heading', name='음성 엔진').count() == 1 and g.get_by_role('button', name='Google', exact=True).get_attribute('aria-pressed') == 'true')
     click(g, '들어 보기')
     wait_js(g, 'window.__bridge.spoken.length >= 1')
     sp = g.evaluate('window.__bridge.spoken.at(-1)')
-    check('앱: 휴대폰 음성으로 들려줌 (목소리·빠르기 전달)', sp['text'] == '사과, 할머니, 물 좀 주세요.' and sp['voice'] == 'ko-kr-x-ism-local' and sp['rate'] == 1, json.dumps(sp, ensure_ascii=False))
+    check('앱: 가장 좋은 목소리로 들려줌', sp['text'] == '사과, 할머니, 물 좀 주세요.' and sp['voice'] == 'ko-kr-x-kob-network' and sp['rate'] == 1, json.dumps(sp, ensure_ascii=False))
+    click(g, '목소리 4 · 휴대폰 기본 목소리 (Google)')
+    wait_js(g, "window.__bridge.spoken.at(-1).voice === '__default__'")
+    click(g, '천천히', exact=True)
+    wait_js(g, "window.__bridge.spoken.at(-1).text === '물 좀 주세요.' && window.__bridge.spoken.at(-1).rate === 0.8")
+    check('앱: 빠르기를 고르면 그 빠르기로 짧은 문장을 읽어 줌', True)
+    click(g, '보통', exact=True)
+    wait_js(g, "window.__bridge.spoken.at(-1).rate === 1")
+    g.get_by_role('button', name='삼성', exact=True).click()
+    check('앱: 음성 엔진 바꾸기', g.evaluate('window.__bridge.engineSet') == 'com.samsung.SMT' and g.get_by_role('button', name='삼성', exact=True).get_attribute('aria-pressed') == 'true')
+    click(g, '목소리 1 · 고품질 온라인 목소리 1')
     click(g, '다음')
     if g.get_by_role('heading', name='복구 코드를 적어 두세요').count():
         g.locator('#wrote').check(); click(g, '시작하기')

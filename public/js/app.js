@@ -7,9 +7,10 @@ import * as speech from './speech.js';
 import * as words from './words.js';
 import * as backup from './backup.js';
 
-const VERSION = '3.2.0';
+const VERSION = '3.4.0';
 const CONSENT_VERSION = '2026-11-v3';
 const SAMPLE = '사과, 할머니, 물 좀 주세요';
+const RATE_SAMPLE = '물 좀 주세요';
 
 const app = document.getElementById('app');
 const env = speech.detectEnv();
@@ -451,9 +452,36 @@ SCREENS['setup-intro'] = () => {
 function voicePanel({ onDone, doneLabel }) {
   const list = h('div', { class: 'choices col', role: 'group', 'aria-label': '목소리' }, note('목소리를 찾고 있어요…'));
   const rates = h('div', { class: 'choices' });
+  // 빠르기를 고르면 짧은 문장을 그 빠르기로 바로 들려줌
   const drawRates = () => rates.replaceChildren(...speech.RATES.map((r) =>
-    choice(r.label, dev().rate === r.value, () => { store.setDevice({ rate: r.value }); drawRates(); })));
+    choice(r.label, dev().rate === r.value, () => {
+      store.setDevice({ rate: r.value });
+      drawRates();
+      speech.speak(RATE_SAMPLE, { voice: dev().voice, rate: r.value });
+    })));
   drawRates();
+
+  // 앱 안: 음성 엔진 고르기 (Google·삼성 등 두 개 이상 있을 때만)
+  const engineBox = h('div', {});
+  const synth = globalThis.speechSynthesis;
+  const drawEngines = () => {
+    const list = env.isApp && synth && synth.engines ? synth.engines() : [];
+    if (list.length < 2) { engineBox.replaceChildren(); return; }
+    engineBox.replaceChildren(
+      h('h2', {}, '음성 엔진'),
+      h('p', { class: 'small-text' }, '엔진마다 목소리가 달라요. 고품질 목소리는 대개 Google 엔진에 있어요.'),
+      h('div', { class: 'choices' }, list.map((e) => choice(e.label || e.pkg, !!e.current, () => {
+        if (e.current || !synth.setEngine(e.pkg)) return;
+        store.setDevice({ voice: '' });
+        list.forEach((x) => { x.current = x.pkg === e.pkg; });
+        engineBox.querySelectorAll('.choice').forEach((b, i) => {
+          b.classList.toggle('on', list[i].current);
+          b.setAttribute('aria-pressed', list[i].current ? 'true' : 'false');
+        });
+        setTimeout(() => drawVoices(true), 1200);
+      }))));
+  };
+  drawEngines();
 
   async function drawVoices(refresh = false) {
     list.replaceChildren(note('목소리를 찾고 있어요…'));
@@ -479,7 +507,9 @@ function voicePanel({ onDone, doneLabel }) {
 
   return [
     !env.tts ? note('이 브라우저에서는 소리를 낼 수 없어요. 안드로이드는 Chrome, 아이폰은 Safari로 열어 주세요.', 'warn') : null,
+    engineBox,
     h('h2', {}, '목소리'),
+    env.isApp ? h('p', { class: 'small-text' }, '맨 위가 가장 음질이 좋은 목소리예요. \u2018온라인\u2019 목소리는 인터넷이 필요하고, 끊기면 기기 목소리로 읽어요.') : null,
     list,
     h('div', { class: 'row' },
       btn('들어 보기', () => speech.speak(SAMPLE, { voice: dev().voice, rate: dev().rate }), { kind: 'primary' }),
@@ -1194,6 +1224,8 @@ async function deleteAll() {
 
 applyFontScale(getFontScale(), { save: false });
 store.load();
+// 앱 3.3: 예전에 고른 목소리 대신 가장 좋은 음질의 목소리가 자동으로 골라지도록 한 번 되돌림
+if (env.isApp && !store.device().voiceReset330) store.setDevice({ voice: '', voiceReset330: true });
 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   navigator.serviceWorker.register('./sw.js').catch(() => { /* 오프라인 기능만 빠짐 */ });

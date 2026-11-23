@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -37,7 +38,9 @@ import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 말하기 짝꿍 앱.
@@ -51,6 +54,12 @@ public class MainActivity extends Activity {
     private static final String HOST = "malhagi-one.vercel.app";
     private static final int BACKGROUND = 0xFFFBF8F3;
     private static final int FILE_REQUEST = 1001;
+    /** Chrome과 같은 방식: 특정 목소리를 고르지 않고, 휴대폰 설정의 기본 한국어 목소리를 씀 */
+    private static final String DEFAULT_VOICE = "__default__";
+    private static final Locale KOREAN = Locale.KOREA; // ko-KR (Chrome이 쓰는 값과 같음)
+    /** 고품질 한국어 목소리가 있는 Google 음성 엔진을 먼저 씀 (없으면 휴대폰 기본 엔진) */
+    private static final String GOOGLE_TTS = "com.google.android.tts";
+    private static final String PREFS = "malhagi";
 
     private WebView web;
     private View splash;
@@ -58,6 +67,16 @@ public class MainActivity extends Activity {
     private volatile boolean ttsReady = false;
     private volatile boolean immersive = false;
     private ValueCallback<Uri[]> fileCallback;
+    private String enginePkg = GOOGLE_TTS;
+    /** 인터넷 목소리로 읽는 중인 문장: 실패하면 기본 목소리로 다시 읽음 */
+    private final Map<String, String[]> networkUtterances = new ConcurrentHashMap<>();
+
+    private final UtteranceProgressListener progress = new UtteranceProgressListener() {
+        @Override public void onStart(String id) { }
+        @Override public void onDone(String id) { networkUtterances.remove(id); notifySpeech(id, "end"); }
+        @Override public void onError(String id) { if (!retryWithDefault(id)) notifySpeech(id, "error"); }
+        @Override public void onStop(String id, boolean interrupted) { networkUtterances.remove(id); notifySpeech(id, "end"); }
+    };
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -97,23 +116,14 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
         s.setSupportMultipleWindows(false);
-        s.setUserAgentString(s.getUserAgentString() + " MalhagiApp/3.2");
+        s.setUserAgentString(s.getUserAgentString() + " MalhagiApp/3.3.0");
 
         web.addJavascriptInterface(new Bridge(), "MalhagiAndroid");
         web.setWebViewClient(new Client());
         web.setWebChromeClient(new Chrome());
 
-        tts = new TextToSpeech(getApplicationContext(), status -> {
-            if (status != TextToSpeech.SUCCESS || tts == null) return;
-            tts.setLanguage(Locale.KOREAN);
-            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                @Override public void onStart(String id) { }
-                @Override public void onDone(String id) { notifySpeech(id, "end"); }
-                @Override public void onError(String id) { notifySpeech(id, "error"); }
-                @Override public void onStop(String id, boolean interrupted) { notifySpeech(id, "end"); }
-            });
-            ttsReady = true;
-        });
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        initTts(prefs.getString("tts_engine", GOOGLE_TTS));
 
         if (savedInstanceState != null) web.restoreState(savedInstanceState);
         else web.loadUrl(HOME);
@@ -284,6 +294,64 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** 음성 엔진 켜기 (요청한 엔진이 없으면 안드로이드가 휴대폰 기본 엔진을 씀) */
+    private void initTts(String engine) {
+        ttsReady = false;
+        networkUtterances.clear();
+        if (tts != null) {
+            try { tts.shutdown(); } catch (Exception ignored) { }
+        }
+        enginePkg = engine;
+        final TextToSpeech[] holder = new TextToSpeech[1];
+        holder[0] = new TextToSpeech(getApplicationContext(), status -> {
+            TextToSpeech t = holder[0];
+            if (status != TextToSpeech.SUCCESS || t == null || t != tts) return;
+            t.setLanguage(KOREAN);
+            t.setOnUtteranceProgressListener(progress);
+            ttsReady = true;
+        }, engine);
+        tts = holder[0];
+    }
+
+    /** 지금 쓰는 엔진의 패키지 이름 */
+    private String currentEngine() {
+        try {
+            for (TextToSpeech.EngineInfo e : tts.getEngines()) if (e.name.equals(enginePkg)) return enginePkg;
+            String d = tts.getDefaultEngine();
+            return d == null ? "" : d;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private static String engineName(String pkg, String fallback) {
+        if (pkg == null) return fallback == null ? "" : fallback;
+        if (pkg.contains("google")) return "Google";
+        if (pkg.contains("samsung") || pkg.contains("SMT")) return "삼성";
+        return fallback == null ? pkg : fallback;
+    }
+
+    private String engineLabel() {
+        String pkg = currentEngine();
+        try {
+            for (TextToSpeech.EngineInfo e : tts.getEngines()) if (e.name.equals(pkg)) return engineName(pkg, e.label);
+        } catch (Exception ignored) { }
+        return engineName(pkg, "");
+    }
+
+    /** 인터넷 목소리가 실패하면(인터넷 끊김 등) 같은 문장을 기본 목소리로 다시 읽음 */
+    private boolean retryWithDefault(String id) {
+        String[] r = networkUtterances.remove(id);
+        if (r == null || tts == null) return false;
+        try {
+            tts.setLanguage(KOREAN);
+            tts.setSpeechRate(Float.parseFloat(r[1]));
+            return tts.speak(r[0], TextToSpeech.QUEUE_FLUSH, new Bundle(), id) == TextToSpeech.SUCCESS;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private Voice findVoice(String name) {
         if (tts == null || name == null || name.isEmpty()) return null;
         try {
@@ -301,12 +369,20 @@ public class MainActivity extends Activity {
             return ttsReady;
         }
 
-        /** 한국어 목소리 목록 (JSON 배열) */
+        /** 한국어 목소리 목록 (JSON 배열). 맨 앞은 휴대폰 기본 목소리(Chrome과 같은 소리) */
         @JavascriptInterface
         public String voices() {
             JSONArray list = new JSONArray();
             if (!ttsReady || tts == null) return list.toString();
             try {
+                JSONObject d = new JSONObject();
+                d.put("name", DEFAULT_VOICE);
+                d.put("voiceURI", DEFAULT_VOICE);
+                d.put("lang", "ko-KR");
+                d.put("localService", true);
+                d.put("isDefault", true);
+                d.put("engine", engineLabel());
+                list.put(d);
                 Set<Voice> voices = tts.getVoices();
                 if (voices != null) {
                     for (Voice v : voices) {
@@ -320,6 +396,7 @@ public class MainActivity extends Activity {
                         o.put("lang", l.toLanguageTag());
                         o.put("localService", !v.isNetworkConnectionRequired());
                         o.put("quality", v.getQuality());
+                        o.put("latency", v.getLatency());
                         list.put(o);
                     }
                 }
@@ -334,15 +411,49 @@ public class MainActivity extends Activity {
                 return;
             }
             try {
-                Voice v = findVoice(voiceName);
+                Voice v = DEFAULT_VOICE.equals(voiceName) ? null : findVoice(voiceName);
                 if (v != null) tts.setVoice(v);
-                else tts.setLanguage(Locale.KOREAN);
-                tts.setSpeechRate(Math.max(0.3f, Math.min(2f, rate)));
+                else tts.setLanguage(KOREAN); // 기본 목소리로 되돌림
+                float r = Math.max(0.3f, Math.min(2f, rate));
+                tts.setSpeechRate(r);
+                if (v != null && v.isNetworkConnectionRequired()) networkUtterances.put(id, new String[] { text, String.valueOf(r) });
                 int r = tts.speak(text, TextToSpeech.QUEUE_FLUSH, new Bundle(), id);
                 if (r != TextToSpeech.SUCCESS) notifySpeech(id, "error");
             } catch (Exception e) {
                 notifySpeech(id, "error");
             }
+        }
+
+        /** 설치된 음성 엔진 목록 (JSON 배열: pkg, label, current) */
+        @JavascriptInterface
+        public String engines() {
+            JSONArray list = new JSONArray();
+            if (tts == null) return list.toString();
+            try {
+                String cur = currentEngine();
+                for (TextToSpeech.EngineInfo e : tts.getEngines()) {
+                    JSONObject o = new JSONObject();
+                    o.put("pkg", e.name);
+                    o.put("label", engineName(e.name, e.label));
+                    o.put("current", e.name.equals(cur));
+                    list.put(o);
+                }
+            } catch (Exception ignored) { }
+            return list.toString();
+        }
+
+        /** 음성 엔진 바꾸기 (설치된 엔진만) */
+        @JavascriptInterface
+        public boolean setEngine(String pkg) {
+            if (pkg == null || tts == null) return false;
+            boolean found = false;
+            try {
+                for (TextToSpeech.EngineInfo e : tts.getEngines()) if (e.name.equals(pkg)) found = true;
+            } catch (Exception ignored) { }
+            if (!found) return false;
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("tts_engine", pkg).apply();
+            runOnUiThread(() -> initTts(pkg));
+            return true;
         }
 
         @JavascriptInterface
