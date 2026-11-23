@@ -172,12 +172,18 @@ with sync_playwright() as p:
     run_practice(a, 5)
     expect(a.get_by_role('heading', name='잘하셨어요!')).to_be_visible()
     click(a, '처음 화면으로')
-    check('홈에 두 목록 모두 완료 표시', a.get_by_text('✓ 다 했어요').count() == 2)
+    expect(a.get_by_text('✓ 다 했어요')).to_have_count(2)
+    check('홈에 두 목록 모두 완료 표시', a.get_by_text('✓ 다 했어요').count() == 2, a.locator('main').inner_text()[:400])
 
     # 분야별 낱말
     click(a, '분야별 낱말')
     expect(a.get_by_role('heading', name='분야별 낱말')).to_be_visible()
     click(a, re.compile('^교통·이동'))
+    expect(a.get_by_role('heading', name='교통·이동')).to_be_visible()
+    check('교통·이동 100개를 10개씩 10묶음', a.locator('.set').count() == 10)
+    a.screenshot(path=f'{SHOTS}/06b-sets.png', full_page=True)
+    click(a, '처음부터 시작하기')
+    expect(a.locator('.tag')).to_have_text('교통·이동 1~10')
     for _ in range(8):
         if a.locator('.target').inner_text() == '엘리베이터': break
         click(a, '다음 ›')
@@ -188,7 +194,18 @@ with sync_playwright() as p:
     check('가장 큰 글씨에서도 긴 낱말이 한 줄', t.inner_text() == '엘리베이터' and a.evaluate("(() => { const e = document.querySelector('.target'); return e.scrollWidth <= e.clientWidth + 1 && e.getClientRects().length === 1 && e.offsetHeight < parseFloat(getComputedStyle(e).fontSize) * 2; })()"))
     check('가장 큰 글씨 연습 화면이 옆으로 넘치지 않음', no_overflow(a))
     a.screenshot(path=f'{SHOTS}/07-practice-largest.png', full_page=True)
+    click(a, '다음 ›')
+    click(a, '마치기 ✓')
+    expect(a.get_by_role('heading', name='잘하셨어요!')).to_be_visible()
+    click(a, '다음 10개 하기')
+    expect(a.locator('.tag')).to_have_text('교통·이동 11~20')
+    check('다음 10개 하기 → 11~20번', a.locator('.step').inner_text() == '1 / 10')
+    wait_js(a, '/[1-9]/.test(document.querySelector(".count").textContent)')
     click(a, '‹ 그만하기')
+    expect(a.get_by_role('heading', name='교통·이동')).to_be_visible()
+    check('묶음 화면에 들은 묶음 표시 (1~10, 11~20)', a.locator('.set.done').count() + a.locator('.set.part').count() == 2 and a.locator('.set').nth(1).get_attribute('class') != 'set', str([a.locator('.set').nth(i).get_attribute('class') for i in range(3)]))
+    check('가장 큰 글씨 묶음 화면이 넘치지 않음', no_overflow(a))
+    a.get_by_role('button', name='홈', exact=True).click()
 
     # 글씨 크기 창
     a.get_by_role('button', name=re.compile('글씨 크기')).first.click()
@@ -318,6 +335,7 @@ with sync_playwright() as p:
     expect(a.get_by_role('heading', name='오늘의 연습')).to_be_visible()
     click(a, '분야별 낱말')
     click(a, re.compile('^몸'))
+    click(a, '처음부터 시작하기')
     expect(a.locator('.target')).to_have_text('머리')
     check('오프라인에서도 연습 가능', True)
     ctx1.set_offline(False)

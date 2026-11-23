@@ -7,7 +7,7 @@ import * as speech from './speech.js';
 import * as words from './words.js';
 import * as backup from './backup.js';
 
-const VERSION = '3.0.2';
+const VERSION = '3.1.0';
 const CONSENT_VERSION = '2026-11-v3';
 const SAMPLE = '사과, 할머니, 물 좀 주세요';
 
@@ -643,14 +643,63 @@ SCREENS.more = (type) => {
         if (!mine.length) { go(`settings-words/${type}`); return; }
         startPractice(mine, { title: words.MY_CATEGORY[type], from: `more/${type}`, kind: 'mine' });
       }, { cls: 'big mine' }),
-      words.categories(type).map((c) => btn(`${c.name} · ${c.items.length}개`, () =>
-        startPractice(c.items, { title: c.name, from: `more/${type}`, kind: 'category' }), { cls: 'big' }))),
+      words.categories(type).map((c) => btn(`${c.name} · ${c.items.length}개`, () => go(`cat/${type}/${c.id}`), { cls: 'big' }))),
   });
 };
 
-function startPractice(items, { title, from, kind, start = 0 }) {
+// 분야 하나: 10개씩 묶어서 고르기 (100개를 한 번에 하면 지치기 쉬움)
+const SET_SIZE = 10;
+
+function startSet(type, catId, start) {
+  const c = words.categories(type).find((x) => x.id === catId);
+  if (!c) { go(`more/${type}`); return; }
+  const items = c.items.slice(start, start + SET_SIZE);
+  const hasNext = start + SET_SIZE < c.items.length;
+  startPractice(items, {
+    title: `${c.name} ${start + 1}~${start + items.length}`,
+    from: `cat/${type}/${catId}`,
+    kind: 'category',
+    next: hasNext ? { type, catId, start: start + SET_SIZE } : null,
+  });
+}
+
+SCREENS.cat = (arg) => {
+  const [type, catId] = arg.split('/');
+  const c = (type === 'word' || type === 'sentence') && words.categories(type).find((x) => x.id === catId);
+  if (!c) { go('home'); return; }
+  const day = today();
+  const sets = [];
+  for (let i = 0; i < c.items.length; i += SET_SIZE) sets.push(c.items.slice(i, i + SET_SIZE));
+  const firstLeft = sets.findIndex((set) => set.some((it) => !(day.items[it.id]?.p > 0)));
+  frame({
+    title: c.name,
+    sub: `${c.items.length}개를 ${SET_SIZE}개씩 나눠 연습해요. 오늘 다 들은 묶음에는 ✓가 붙어요.`,
+    back: { label: type === 'word' ? '분야별 낱말' : '분야별 문장', onClick: () => go(`more/${type}`) },
+    nav: 'home',
+    body: [
+      firstLeft >= 0
+        ? btn(firstLeft === 0 && sets[0].every((it) => !(day.items[it.id]?.p > 0)) ? '처음부터 시작하기' : `이어서 하기 (${firstLeft * SET_SIZE + 1}~${firstLeft * SET_SIZE + sets[firstLeft].length})`,
+          () => startSet(type, catId, firstLeft * SET_SIZE), { kind: 'primary', cls: 'big' })
+        : note('오늘 이 분야를 모두 들었어요! 다시 하고 싶은 묶음을 골라 보세요.'),
+      h('div', { class: 'set-grid' }, sets.map((set, i) => {
+        const heard = set.filter((it) => day.items[it.id]?.p > 0).length;
+        const done = heard === set.length;
+        const a = i * SET_SIZE + 1;
+        const b = i * SET_SIZE + set.length;
+        return h('button', {
+          type: 'button', class: `set${done ? ' done' : heard ? ' part' : ''}`,
+          'aria-label': `${a}번부터 ${b}번까지${done ? ', 오늘 다 들음' : heard ? `, ${heard}개 들음` : ''}`,
+          onclick: () => startSet(type, catId, i * SET_SIZE),
+        }, h('span', { class: 'set-range' }, `${a}~${b}`), h('span', { class: 'set-preview' }, `${set[0].t} …`),
+        done ? h('span', { class: 'set-mark', 'aria-hidden': 'true' }, '✓') : heard ? h('span', { class: 'set-mark', 'aria-hidden': 'true' }, `${heard}/${set.length}`) : null);
+      })),
+    ],
+  });
+};
+
+function startPractice(items, { title, from, kind, start = 0, next = null }) {
   if (!items.length) return;
-  S.practice = { items: items.map(({ id, t, k, c }) => ({ id, t, k, c })), i: Math.min(start, items.length - 1), title, from, kind };
+  S.practice = { items: items.map(({ id, t, k, c }) => ({ id, t, k, c })), i: Math.min(start, items.length - 1), title, from, kind, next };
   go('practice');
 }
 
@@ -672,7 +721,7 @@ SCREENS.practice = () => {
     const next = P.i + delta;
     if (next >= P.items.length) {
       const day = today();
-      S.lastDone = { title: P.title, n: P.items.length, plays: P.items.reduce((s, x) => s + (day.items[x.id]?.p || 0), 0), kind: P.kind, from: P.from };
+      S.lastDone = { title: P.title, n: P.items.length, plays: P.items.reduce((s, x) => s + (day.items[x.id]?.p || 0), 0), kind: P.kind, from: P.from, next: P.next };
       go('done');
       return;
     }
@@ -719,8 +768,9 @@ SCREENS.done = () => {
       h('div', { class: 'stack' },
         L.kind === 'today-word' && sentenceLeft ? btn('오늘의 문장 하기', () => startPractice(day.plan.sentence, { title: '오늘의 문장', from: 'home', kind: 'today-sentence' }), { kind: 'primary', cls: 'big' }) : null,
         L.kind === 'today-sentence' && wordLeft ? btn('오늘의 낱말 하기', () => startPractice(day.plan.word, { title: '오늘의 낱말', from: 'home', kind: 'today-word' }), { kind: 'primary', cls: 'big' }) : null,
+        L.next ? btn('다음 10개 하기', () => startSet(L.next.type, L.next.catId, L.next.start), { kind: 'primary', cls: 'big' }) : null,
         S.practice ? btn('같은 목록 한 번 더', () => startPractice(S.practice.items, { ...S.practice, start: 0 }), { cls: 'big' }) : null,
-        btn('분야별로 더 연습하기', () => go('more/word'), { cls: 'big' }),
+        L.kind === 'category' && L.from ? btn('묶음 고르기', () => go(L.from), { cls: 'big' }) : btn('분야별로 더 연습하기', () => go('more/word'), { cls: 'big' }),
         btn('처음 화면으로', () => go('home'))),
     ],
   });

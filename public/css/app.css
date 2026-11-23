@@ -151,6 +151,17 @@ details.card summary { cursor: pointer; font-weight: 600; min-height: 2.4rem; di
 .move-row .btn { min-height: 3.4rem; }
 .celebrate { font-size: 4rem; text-align: center; margin: 0.5rem 0; }
 
+/* ── 10개 묶음 ── */
+.set-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; margin-top: 1rem; }
+.set { font: inherit; position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; min-height: 4.2rem; padding: 0.6rem 0.9rem; border-radius: 14px; border: 2px solid var(--line); background: var(--surface); color: var(--ink); text-align: left; cursor: pointer; }
+.set:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.set.part { border-color: var(--mint-2); }
+.set.done { background: var(--mint-soft); border-color: var(--accent); }
+.set-range { font-weight: 600; font-size: 1.15rem; }
+.set-preview { font-size: 0.95rem; color: var(--ink-2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-mark { position: absolute; top: 0.5rem; right: 0.7rem; color: var(--accent); font-weight: 600; font-size: 0.95rem; }
+html[data-large-text] .set-grid { grid-template-columns: 1fr; }
+
 /* ── 기록 ── */
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin: 0.6rem 0; }
 .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 0.7rem 0.4rem; text-align: center; }

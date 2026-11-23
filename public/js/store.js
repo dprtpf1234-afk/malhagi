@@ -12,7 +12,7 @@
 const KEY = 'malhagi.v3.data';
 const DEVICE_KEY = 'malhagi.v3.device';
 export const SCHEMA = 3;
-export const LIMITS = Object.freeze({ MY_WORDS: 60, WORD_LEN: 20, SENTENCE_LEN: 40, DAYS: 3660, ITEMS_PER_DAY: 400 });
+export const LIMITS = Object.freeze({ MY_WORDS: 60, WORD_LEN: 20, SENTENCE_LEN: 40, DAYS: 3660, ITEMS_PER_DAY: 3000 });
 
 let memData = null;
 let memDevice = null;
