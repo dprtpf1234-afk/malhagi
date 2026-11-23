@@ -7,7 +7,7 @@ import * as speech from './speech.js';
 import * as words from './words.js';
 import * as backup from './backup.js';
 
-const VERSION = '3.0.0';
+const VERSION = '3.0.1';
 const CONSENT_VERSION = '2026-11-v3';
 const SAMPLE = '사과, 할머니, 물 좀 주세요';
 
@@ -326,6 +326,9 @@ function showCodeModal(code) {
   }).then((v) => { if (v === 'copy') copyText(backup.formatCode(code)); });
 }
 
+// 백업 서버(저장소)가 연결되어 있을 때만 백업 기능을 보여 줌. 연결하지 않으면 기기 저장 + 파일 저장으로만 동작
+const backupAvailable = () => !!(S.server && S.server.configured);
+
 // ── 화면들 ──
 
 const SCREENS = {};
@@ -385,15 +388,15 @@ SCREENS['setup-intro'] = () => {
         h('p', {}, '말하기 짝꿍은 소리를 듣고 따라 말하는 연습을 돕는 도구예요. 치료나 진단을 대신하지 않아요. 연습 방법은 담당 의사나 언어재활사와 상의해 주세요.')),
       card(h('h2', {}, '기록은 이 기기에 저장돼요'),
         h('p', {}, '어떤 낱말을 몇 번 들었는지가 이 휴대폰에 저장돼요. 이름이나 연락처는 묻지 않아요.'),
-        env.isIOS ? note('아이폰 Safari는 7일 동안 열지 않으면 저장 기록을 지울 수 있어요. 홈 화면에 추가해 쓰거나 아래 백업을 켜 두세요.') : null),
+        env.isIOS ? note(configured ? '아이폰 Safari는 7일 동안 열지 않으면 저장 기록을 지울 수 있어요. 홈 화면에 추가해 쓰거나 아래 백업을 켜 두세요.' : '아이폰 Safari는 7일 동안 열지 않으면 저장 기록을 지울 수 있어요. 홈 화면에 추가해서 쓰세요.') : null,
+        configured ? null : h('p', { class: 'small-text' }, '휴대폰을 바꿀 때는 설정 → 기록 저장·불러오기에서 기록을 파일로 옮길 수 있어요.')),
       configured
         ? card(h('h2', {}, '기록 백업 (선택)'),
           h('p', {}, '휴대폰을 바꾸거나 잃어버려도 기록을 되살릴 수 있게, 기록을 이 휴대폰에서 암호화한 뒤 백업 서버에 보관해요. 암호를 푸는 열쇠는 곧 받으실 복구 코드뿐이라, 운영자도 내용을 볼 수 없어요.'),
           h('label', { class: 'check', for: 'agree-backup' }, check,
             h('span', {}, '연습 기록(건강과 관련된 정보일 수 있어요)을 암호화해 백업 서버에 보관하는 데 동의해요.')),
           h('p', { class: 'small-text' }, '동의하지 않아도 앱을 모두 쓸 수 있어요. 백업은 나중에 설정에서 켜거나 끌 수 있어요.'))
-        : card(h('h2', {}, '기록 백업'),
-          h('p', {}, S.server ? '백업 서버가 아직 준비되지 않았어요. 준비되면 설정에서 켤 수 있어요.' : '백업 서버를 확인하고 있어요…')),
+        : null,
       h('p', {}, h('a', { href: './privacy.html', target: '_blank', rel: 'noopener' }, '개인정보 처리방침 보기')),
       h('div', { class: 'actions' }, startBtn),
     ],
@@ -555,18 +558,17 @@ SCREENS.restore = () => {
     title: '쓰던 기록 불러오기',
     back: { onClick: () => go(onboarded ? 'settings-backup' : 'start') },
     body: [
-      card(h('h2', {}, '복구 코드로 불러오기'),
-        configured === false || (S.server && !S.server.configured)
-          ? note('백업 서버가 아직 준비되지 않아 복구 코드로 불러올 수 없어요. 기록 파일이 있으면 아래에서 불러오세요.', 'warn')
-          : [
-            h('label', { for: 'code', class: 'label' }, '복구 코드 16자리'),
-            input,
-            h('p', { id: 'code-help', class: 'small-text' }, '대문자·소문자, 띄어쓰기와 줄표(-)는 상관없어요.'),
-            h('div', { class: 'actions' }, go1),
-          ],
-        onboarded ? note('불러온 기록은 이 기기의 기록과 합쳐지고, 이 코드로 백업이 이어져요.') : null),
+      configured
+        ? card(h('h2', {}, '복구 코드로 불러오기'),
+          h('label', { for: 'code', class: 'label' }, '복구 코드 16자리'),
+          input,
+          h('p', { id: 'code-help', class: 'small-text' }, '대문자·소문자, 띄어쓰기와 줄표(-)는 상관없어요.'),
+          h('div', { class: 'actions' }, go1),
+          onboarded ? note('불러온 기록은 이 기기의 기록과 합쳐지고, 이 코드로 백업이 이어져요.') : null)
+        : null,
       card(h('h2', {}, '기록 파일로 불러오기'),
-        h('p', {}, '설정 → 기록 백업 → ‘기록 파일 내려받기’로 저장한 파일을 고르세요.'),
+        h('p', {}, `예전 기기의 설정 → ${configured ? '기록 백업' : '기록 저장·불러오기'} → ‘기록 파일 내려받기’로 저장한 파일을 고르세요.`),
+        onboarded ? h('p', { class: 'small-text' }, '불러온 기록은 이 기기의 기록과 합쳐져요.') : null,
         fileInput,
         h('label', { for: 'file', class: 'btn btn-secondary' }, '파일 고르기')),
       msg,
@@ -825,7 +827,9 @@ SCREENS.settings = () => {
         row('글씨 크기', fontLabel, () => { openFontModal(); }),
         row('목소리와 빠르기', '', () => go('settings-voice')),
         row('나만의 낱말·문장', `${mineCount}개`, () => go('settings-words/word')),
-        row('기록 백업', d.backup.on ? '켜짐' : '꺼짐', () => go('settings-backup')),
+        backupAvailable() || d.backup.on
+          ? row('기록 백업', d.backup.on ? '켜짐' : '꺼짐', () => go('settings-backup'))
+          : row('기록 저장·불러오기', '', () => go('settings-backup')),
         row('홈 화면에 추가하기', '', () => homeScreenGuide(false))),
       h('div', { class: 'rows' },
         h('a', { class: 'row-item', href: './privacy.html', target: '_blank', rel: 'noopener' }, h('span', { class: 'row-label' }, '개인정보 처리방침'), h('span', { class: 'chev', 'aria-hidden': 'true' }, '›')),
@@ -1008,6 +1012,29 @@ SCREENS['settings-backup'] = () => {
     toast('기록 파일을 내려받았어요.');
   }
 
+  const fileCards = [
+    card(h('h2', {}, '기록 파일 내려받기'),
+      h('p', {}, '휴대폰을 바꾸기 전이나 가끔 한 번씩 기록을 파일로 내려받아 두세요. 새 기기에서 ‘쓰던 기록 불러오기’로 그대로 옮길 수 있어요.'),
+      h('p', { class: 'small-text' }, '이 파일에는 암호가 걸려 있지 않으니 잘 보관해 주세요.'),
+      btn('기록 파일 내려받기', exportFile, { kind: 'primary' })),
+    card(h('h2', {}, '다른 기기의 기록 불러오기'),
+      h('p', {}, d.backup.on || configured ? '다른 기기에서 받은 복구 코드나 기록 파일로 기록을 불러와 이 기기의 기록과 합쳐요.' : '다른 기기에서 내려받은 기록 파일을 불러와 이 기기의 기록과 합쳐요.'),
+      btn('불러오기', () => go('restore'))),
+  ];
+
+  if (!d.backup.on && !configured) {
+    frame({
+      title: '기록 저장·불러오기',
+      back: { label: '설정', onClick: () => go('settings') },
+      nav: 'settings',
+      body: [
+        note('연습 기록은 이 휴대폰 안에만 있어요. 휴대폰을 바꾸거나 브라우저 기록을 지우면 사라질 수 있어요.'),
+        ...fileCards,
+      ],
+    });
+    return;
+  }
+
   frame({
     title: '기록 백업',
     back: { label: '설정', onClick: () => go('settings') },
@@ -1024,16 +1051,9 @@ SCREENS['settings-backup'] = () => {
           status)
         : card(h('h2', {}, '백업이 꺼져 있어요'),
           h('p', {}, '기록은 이 기기에만 있어요. 휴대폰을 바꾸거나 브라우저 기록을 지우면 사라질 수 있어요.'),
-          configured
-            ? h('div', { class: 'stack backup-actions' }, btn('백업 켜기', turnOn, { kind: 'primary' }))
-            : note(S.server ? '백업 서버가 아직 준비되지 않았어요. 대신 아래에서 기록을 파일로 저장해 두세요.' : '백업 서버를 확인하고 있어요…'),
+          h('div', { class: 'stack backup-actions' }, btn('백업 켜기', turnOn, { kind: 'primary' })),
           status),
-      card(h('h2', {}, '다른 기기의 기록 불러오기'),
-        h('p', {}, '다른 기기에서 받은 복구 코드나 기록 파일로 기록을 불러와 이 기기의 기록과 합쳐요.'),
-        btn('불러오기', () => go('restore'))),
-      card(h('h2', {}, '파일로 저장하기'),
-        h('p', {}, '기록을 파일로 내려받아 보관할 수 있어요. 이 파일에는 암호가 걸려 있지 않으니 잘 보관해 주세요.'),
-        btn('기록 파일 내려받기', exportFile)),
+      ...fileCards,
     ],
   });
 };
