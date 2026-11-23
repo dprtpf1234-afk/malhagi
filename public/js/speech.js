@@ -69,7 +69,10 @@ export function getVoices({ refresh = false } = {}) {
 /** 화면에 보여 줄 목소리 이름 */
 export function voiceLabel(v) {
   // 예: 'Yuna (Korean (South Korea))' → 'Yuna', 'Google 한국의' → 그대로
-  return String(v.name || '').replace(/\s*\((?:Korean|한국어).*$/i, '').replace(/\s+/g, ' ').trim() || '기본 목소리';
+  return String(v.name || '')
+    .replace(/\s*\((?:Korean|한국어).*$/i, '')
+    .replace(/\s+-\s+(?:Korean|한국어).*$/i, '') // 예: 'Microsoft Heami - Korean' → 'Microsoft Heami'
+    .replace(/\s+/g, ' ').trim() || '기본 목소리';
 }
 
 /** 끝에 문장부호가 없으면 마침표를 붙여, 낱말 하나도 끝을 또렷하게 내려 읽게 합니다. */

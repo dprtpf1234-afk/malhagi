@@ -7,7 +7,7 @@ import * as speech from './speech.js';
 import * as words from './words.js';
 import * as backup from './backup.js';
 
-const VERSION = '3.0.1';
+const VERSION = '3.0.2';
 const CONSENT_VERSION = '2026-11-v3';
 const SAMPLE = '사과, 할머니, 물 좀 주세요';
 
@@ -70,7 +70,7 @@ function frame({ title, sub, back, nav, body, cls = '' }) {
   const main = h('main', { class: `screen ${cls}`, id: 'main' },
     heading, sub ? h('p', { class: 'sub' }, sub) : null, body);
   app.replaceChildren(top, main, nav ? bottomNav(nav) : '');
-  document.title = title ? `${title} · 말하기 짝꿍` : '말하기 짝꿍';
+  document.title = title && title !== '말하기 짝꿍' ? `${title} · 말하기 짝꿍` : '말하기 짝꿍';
   if (heading) heading.focus({ preventScroll: true });
   return main;
 }
@@ -366,7 +366,7 @@ SCREENS['setup-intro'] = () => {
   const configured = S.server && S.server.configured;
   let agree = false;
   const startBtn = btn('', () => finish(), { kind: 'primary', cls: 'big' });
-  const label = () => { startBtn.textContent = agree ? '백업 켜고 시작하기' : '이 기기에만 저장하고 시작하기'; };
+  const label = () => { startBtn.textContent = !configured ? '시작하기' : agree ? '백업 켜고 시작하기' : '이 기기에만 저장하고 시작하기'; };
   label();
   const check = h('input', { type: 'checkbox', id: 'agree-backup', onchange: (e) => { agree = e.target.checked; label(); } });
 
