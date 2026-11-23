@@ -1,5 +1,60 @@
 // 들려주기 (휴대폰에 있는 한국어 목소리 사용, 마이크는 쓰지 않음)
 
+// ── 안드로이드 앱 연결 ──
+// 앱(웹뷰)에는 브라우저의 소리 내어 읽기가 없어서, 앱이 넣어 준 window.MalhagiAndroid 로 휴대폰 음성 기능을 씁니다.
+// 아래는 그 연결을 브라우저와 같은 모양(speechSynthesis)으로 감싸, 나머지 코드는 그대로 쓰게 합니다.
+const bridge = globalThis.MalhagiAndroid;
+if (bridge && typeof bridge.speak === 'function') installAndroidVoice(bridge);
+
+function installAndroidVoice(b) {
+  const waiting = new Map();
+  let n = 0;
+  const finish = (id, type) => {
+    const u = waiting.get(id);
+    if (!u) return;
+    waiting.delete(id);
+    synth.speaking = waiting.size > 0;
+    const fn = type === 'error' ? u.onerror : u.onend;
+    if (typeof fn === 'function') fn.call(u, { type });
+  };
+  globalThis.__malhagiTts = finish;
+  class Utterance {
+    constructor(text) { this.text = text; this.rate = 1; this.lang = 'ko-KR'; this.voice = null; this.onend = null; this.onerror = null; }
+  }
+  const synth = {
+    speaking: false,
+    pending: false,
+    getVoices() {
+      let raw = [];
+      try { raw = JSON.parse(b.voices() || '[]'); } catch { raw = []; }
+      return raw.map((v) => ({
+        name: v.localService === false ? '인터넷 목소리' : '휴대폰 목소리',
+        lang: String(v.lang || 'ko-KR'),
+        voiceURI: String(v.voiceURI || v.name || ''),
+        localService: v.localService !== false,
+        default: false,
+      }));
+    },
+    addEventListener() {},
+    removeEventListener() {},
+    speak(u) {
+      const id = `u${++n}`;
+      waiting.set(id, u);
+      synth.speaking = true;
+      try { b.speak(id, String(u.text || ''), Number(u.rate) || 1, u.voice ? u.voice.voiceURI : ''); } catch { finish(id, 'error'); }
+    },
+    cancel() {
+      try { b.stop(); } catch { /* 무시 */ }
+      for (const id of [...waiting.keys()]) finish(id, 'end');
+      synth.speaking = false;
+    },
+    resume() {},
+    pause() {},
+  };
+  try { Object.defineProperty(globalThis, 'speechSynthesis', { value: synth, configurable: true, writable: true }); } catch { /* 무시 */ }
+  globalThis.SpeechSynthesisUtterance = Utterance;
+}
+
 export function detectEnv() {
   const ua = navigator.userAgent || '';
   const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -10,8 +65,9 @@ export function detectEnv() {
     isIPhone: /iPhone|iPod/.test(ua),
     isAndroid: /Android/i.test(ua),
     isSamsung: /SamsungBrowser/i.test(ua),
+    isApp: /MalhagiApp\//.test(ua) || !!globalThis.MalhagiAndroid, // 안드로이드 앱 안에서 열림
     inApp: /KAKAOTALK|NAVER\(inapp|Instagram|FBAN|FBAV|Line\/|DaumApps|everytimeApp|; wv\)/i.test(ua),
-    standalone: !!(globalThis.matchMedia?.('(display-mode: standalone)').matches
+    standalone: /MalhagiApp\//.test(ua) || !!(globalThis.matchMedia?.('(display-mode: standalone)').matches
       || globalThis.matchMedia?.('(display-mode: fullscreen)').matches
       || navigator.standalone === true),
   };

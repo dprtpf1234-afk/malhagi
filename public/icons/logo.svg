@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FBF5EC"/>
+      <stop offset="0.55" stop-color="#F0E4D4"/>
+      <stop offset="1" stop-color="#E2CFB8"/>
+    </linearGradient>
+    <linearGradient id="copper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F8D6B2"/>
+      <stop offset="0.28" stop-color="#DE9A6B"/>
+      <stop offset="0.55" stop-color="#A9592F"/>
+      <stop offset="0.78" stop-color="#E5A77B"/>
+      <stop offset="1" stop-color="#874420"/>
+    </linearGradient>
+    <linearGradient id="copperV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F3C49C"/>
+      <stop offset="0.5" stop-color="#B8693C"/>
+      <stop offset="1" stop-color="#8A4722"/>
+    </linearGradient>
+    <linearGradient id="mic" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#B9AEA2"/>
+      <stop offset="0.3" stop-color="#FFFFFF"/>
+      <stop offset="0.55" stop-color="#E7DFD6"/>
+      <stop offset="1" stop-color="#8F8377"/>
+    </linearGradient>
+    <linearGradient id="groove" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FBF1E4"/>
+      <stop offset="1" stop-color="#E8D6C0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.32" cy="0.25" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="micBody"><rect x="226" y="172" width="60" height="108" rx="30"/></clipPath>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="9" stdDeviation="9" flood-color="#5E3B22" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#tile)"/>
+  <rect width="512" height="512" rx="112" fill="url(#glow)"/>
+  <rect x="3" y="3" width="506" height="506" rx="109" fill="none" stroke="#FFFFFF" stroke-opacity="0.7" stroke-width="4"/>
+  <g transform="translate(20.47999999999999 25.99999999999999) scale(0.92)">
+  <g filter="url(#lift)">
+    <!-- S: 두 줄 금속 띠 (바깥 구리 → 가운데 홈 → 홈 안쪽 그늘) -->
+    <path d="M 352 150 C 322 108 252 100 206 122 C 158 145 150 205 196 232 C 226 250 286 258 318 280 C 366 312 356 378 304 398 C 256 416 186 404 156 362" fill="none" stroke="#6E3618" stroke-opacity="0.5" stroke-width="56" stroke-linecap="round" transform="translate(3 6)"/>
+    <path d="M 352 150 C 322 108 252 100 206 122 C 158 145 150 205 196 232 C 226 250 286 258 318 280 C 366 312 356 378 304 398 C 256 416 186 404 156 362" fill="none" stroke="url(#copper)" stroke-width="54" stroke-linecap="round"/>
+    <path d="M 352 150 C 322 108 252 100 206 122 C 158 145 150 205 196 232 C 226 250 286 258 318 280 C 366 312 356 378 304 398 C 256 416 186 404 156 362" fill="none" stroke="#FFF0DF" stroke-opacity="0.6" stroke-width="6" stroke-linecap="round" transform="translate(-8 -9)"/>
+    <path d="M 352 150 C 322 108 252 100 206 122 C 158 145 150 205 196 232 C 226 250 286 258 318 280 C 366 312 356 378 304 398 C 256 416 186 404 156 362" fill="none" stroke="#8C4A26" stroke-opacity="0.55" stroke-width="26" stroke-linecap="round" transform="translate(1 2)"/>
+    <path d="M 352 150 C 322 108 252 100 206 122 C 158 145 150 205 196 232 C 226 250 286 258 318 280 C 366 312 356 378 304 398 C 256 416 186 404 156 362" fill="none" stroke="url(#groove)" stroke-width="22" stroke-linecap="round"/>
+    <!-- 마이크 둘레 틈 -->
+    <rect x="226" y="172" width="60" height="108" rx="30" fill="#F1E6D7" stroke="#F1E6D7" stroke-width="18"/>
+    <path d="M 206 238 C 206 302 306 302 306 238" fill="none" stroke="#F1E6D7" stroke-width="26" stroke-linecap="round"/>
+    <path d="M 256 296 L 256 334" stroke="#F1E6D7" stroke-width="24"/>
+    <rect x="216" y="327" width="80" height="15" rx="7.5" fill="#F1E6D7" stroke="#F1E6D7" stroke-width="10"/>
+    <!-- 받침 -->
+    <path d="M 206 238 C 206 302 306 302 306 238" fill="none" stroke="url(#copperV)" stroke-width="11" stroke-linecap="round"/>
+    <path d="M 256 294 L 256 330" stroke="url(#copperV)" stroke-width="11" stroke-linecap="round"/>
+    <rect x="218" y="328" width="76" height="13" rx="6.5" fill="url(#copper)"/>
+    <!-- 마이크 몸통 -->
+    <rect x="226" y="172" width="60" height="108" rx="30" fill="url(#mic)"/>
+    <g clip-path="url(#micBody)" stroke="#7F7368" stroke-opacity="0.45" stroke-width="3">
+      <path d="M 226 188 H 286 M 226 200 H 286 M 226 212 H 286 M 226 224 H 286"/>
+      <path d="M 236 172 V 230 M 248 172 V 230 M 260 172 V 230 M 272 172 V 230"/>
+    </g>
+    <rect x="222" y="232" width="68" height="12" rx="6" fill="url(#copper)"/>
+    <rect x="226" y="172" width="60" height="108" rx="30" fill="none" stroke="#6E6258" stroke-opacity="0.35" stroke-width="2"/>
+    <ellipse cx="243" cy="200" rx="7" ry="18" fill="#FFFFFF" fill-opacity="0.55"/>
+  </g>
+  </g>
+</svg>

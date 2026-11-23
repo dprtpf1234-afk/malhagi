@@ -7,7 +7,7 @@ import * as speech from './speech.js';
 import * as words from './words.js';
 import * as backup from './backup.js';
 
-const VERSION = '3.1.1';
+const VERSION = '3.2.0';
 const CONSENT_VERSION = '2026-11-v3';
 const SAMPLE = '사과, 할머니, 물 좀 주세요';
 
@@ -22,6 +22,25 @@ const S = {
   syncing: null,
   rev: 0,
 };
+
+// ── 시작 화면 (index.html의 #splash) ──
+// 로고가 입체적으로 떠오르는 동안 앱을 준비하고, 약 2초 뒤 본 화면으로 넘어갑니다. 화면을 누르면 바로 넘어갑니다.
+function finishSplash() {
+  const el = document.getElementById('splash');
+  if (!el) return;
+  if (globalThis.__MALHAGI_NO_SPLASH) { el.remove(); return; }
+  const reduce = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const MIN_MS = reduce ? 700 : 2300;
+  let done = false;
+  const close = () => {
+    if (done) return;
+    done = true;
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 600);
+  };
+  el.addEventListener('click', close);
+  setTimeout(close, Math.max(0, MIN_MS - performance.now()));
+}
 
 // ── 이동 ──
 
@@ -127,8 +146,18 @@ const fsSupported = () => {
   return !!((el.requestFullscreen || el.webkitRequestFullscreen) && (document.fullscreenEnabled || document.webkitFullscreenEnabled));
 };
 
+const appBridge = globalThis.MalhagiAndroid;
+const appFullscreen = () => { try { return !!(appBridge && appBridge.isFullscreen()); } catch { return false; } };
+
 function fullscreenButton() {
   if (env.isIOS && env.standalone) return ''; // 홈 화면 앱은 이미 화면 전체를 씀
+  if (appBridge && appBridge.setFullscreen) {
+    return btn(appFullscreen() ? '전체화면 끄기' : '전체화면', () => {
+      appBridge.setFullscreen(!appFullscreen());
+      document.querySelectorAll('.fs-btn').forEach((b) => { b.textContent = appFullscreen() ? '전체화면 끄기' : '전체화면'; });
+      setTimeout(refit, 150);
+    }, { kind: 'ghost', cls: 'small fs-btn' });
+  }
   return btn(fsElement() ? '전체화면 끄기' : '전체화면', toggleFullscreen, { kind: 'ghost', cls: 'small fs-btn' });
 }
 
@@ -180,7 +209,7 @@ function androidAppGuide() {
         h('li', {}, "아래 '설치 파일 내려받기'를 누르세요."),
         h('li', {}, '내려받은 malhagi-jjakkung.apk 파일을 여세요. (알림창이나 \u2018내 파일 → 다운로드\u2019에 있어요)'),
         h('li', {}, "'출처를 알 수 없는 앱' 허용을 물으면 이 브라우저를 허용하고, '설치'를 누르세요.")),
-      note('Chrome에서 쓰던 기록은 앱에서도 그대로 이어져요. 앱이 소리를 내려면 휴대폰에 Chrome이 있어야 해요.'),
+      note('브라우저에서 쓰던 기록은 앱으로 저절로 옮겨지지 않아요. 옮기려면 먼저 여기서 설정 → 기록 저장·불러오기 → \u2018기록 파일 내려받기\u2019를 한 뒤, 앱에서 \u2018불러오기\u2019로 그 파일을 고르세요.'),
       h('a', { class: 'btn btn-primary big', href: './download/malhagi-jjakkung.apk', download: 'malhagi-jjakkung.apk' }, '설치 파일 내려받기'),
     ],
     actions: [{ label: '닫기', value: true }],
@@ -896,8 +925,8 @@ SCREENS.settings = () => {
         backupAvailable() || d.backup.on
           ? row('기록 백업', d.backup.on ? '켜짐' : '꺼짐', () => go('settings-backup'))
           : row('기록 저장·불러오기', '', () => go('settings-backup')),
-        row('홈 화면에 추가하기', '', () => homeScreenGuide(false)),
-        env.isAndroid && !env.standalone ? row('안드로이드 앱 설치하기', '', () => androidAppGuide()) : null),
+        env.isApp ? null : row('홈 화면에 추가하기', '', () => homeScreenGuide(false)),
+        env.isAndroid && !env.standalone && !env.isApp ? row('안드로이드 앱 설치하기', '', () => androidAppGuide()) : null),
       h('div', { class: 'rows' },
         h('a', { class: 'row-item', href: './privacy.html', target: '_blank', rel: 'noopener' }, h('span', { class: 'row-label' }, '개인정보 처리방침'), h('span', { class: 'chev', 'aria-hidden': 'true' }, '›')),
         row('모든 기록 지우기', '', () => deleteAll(), 'danger')),
@@ -1069,6 +1098,12 @@ SCREENS['settings-backup'] = () => {
 
   function exportFile() {
     const obj = { ...payload(d), exportedAt: new Date().toISOString(), version: VERSION };
+    if (appBridge && appBridge.saveFile) {
+      let r = 'error';
+      try { r = appBridge.saveFile(`말하기짝꿍-기록-${store.dateKey()}.json`, JSON.stringify(obj)); } catch { r = 'error'; }
+      toast(r === 'ok' ? '휴대폰의 다운로드 폴더에 기록 파일을 저장했어요.' : '기록 파일을 저장하지 못했어요.');
+      return;
+    }
     const blob = new Blob([JSON.stringify(obj)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = h('a', { href: url, download: `말하기짝꿍-기록-${store.dateKey()}.json` });
@@ -1172,6 +1207,7 @@ window.addEventListener('online', () => { if (store.data()?.backup.dirty) sync()
 window.addEventListener('resize', () => refit());
 
 render();
+finishSplash();
 backup.ping().then((s) => {
   S.server = s;
   const name = route().name;

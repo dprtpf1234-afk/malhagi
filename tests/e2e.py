@@ -48,10 +48,31 @@ Element.prototype.requestFullscreen = undefined;
 Element.prototype.webkitRequestFullscreen = undefined;
 """
 
-def new_page(browser, ua=ANDROID_UA, width=390, height=844):
-    ctx = browser.new_context(viewport={'width': width, 'height': height}, user_agent=ua, locale='ko-KR',
+FAKE_ANDROID_APP = """
+(() => {
+  window.__bridge = { spoken: [], saved: [], full: false, stopped: 0 };
+  window.MalhagiAndroid = {
+    ready: () => true,
+    voices: () => JSON.stringify([
+      { name: 'ko-kr-x-ism-local', voiceURI: 'ko-kr-x-ism-local', lang: 'ko-KR', localService: true },
+      { name: 'ko-kr-x-kob-network', voiceURI: 'ko-kr-x-kob-network', lang: 'ko-KR', localService: false }]),
+    speak: (id, text, rate, voice) => { window.__bridge.spoken.push({ id, text, rate, voice }); setTimeout(() => window.__malhagiTts(id, 'end'), 30); },
+    stop: () => { window.__bridge.stopped++; },
+    speaking: () => false,
+    isFullscreen: () => window.__bridge.full,
+    setFullscreen: (on) => { window.__bridge.full = !!on; },
+    saveFile: (name, text) => { window.__bridge.saved.push({ name, size: text.length }); return 'ok'; },
+  };
+})();
+"""
+APP_UA = ANDROID_UA + ' MalhagiApp/3.2'
+
+def new_page(browser, ua=ANDROID_UA, width=390, height=844, splash=False, android_app=False):
+    ctx = browser.new_context(viewport={'width': width, 'height': height}, user_agent=APP_UA if android_app else ua, locale='ko-KR',
                               timezone_id='Asia/Seoul', device_scale_factor=2, has_touch=True, is_mobile=True)
-    ctx.add_init_script(FAKE_TTS)
+    if not splash: ctx.add_init_script('window.__MALHAGI_NO_SPLASH = true;')
+    if android_app: ctx.add_init_script(FAKE_ANDROID_APP)
+    else: ctx.add_init_script(FAKE_TTS)
     if ua == IPHONE_UA: ctx.add_init_script(NO_FULLSCREEN)  # 아이폰 Safari는 전체화면을 지원하지 않음
     page = ctx.new_page()
     page.errors = []
@@ -184,6 +205,7 @@ with sync_playwright() as p:
     a.screenshot(path=f'{SHOTS}/06b-sets.png', full_page=True)
     click(a, '처음부터 시작하기')
     expect(a.locator('.tag')).to_have_text('교통·이동 1~10')
+    wait_js(a, '/[1-9]번/.test(document.querySelector(".count").textContent)')
     for _ in range(8):
         if a.locator('.target').inner_text() == '엘리베이터': break
         click(a, '다음 ›')
@@ -391,8 +413,68 @@ with sync_playwright() as p:
     click(e, '다음')
     expect(e.get_by_role('heading', name='오늘의 연습')).to_be_visible()
 
+    # ── 시작 화면 ──
+    print('시작 화면')
+    ctx5, f = new_page(browser, splash=True)
+    f.goto(BASE + '/')
+    expect(f.locator('#splash')).to_be_visible()
+    check('시작 화면: 로고·이름·로딩 막대', f.locator('#splash .splash-tile img').count() == 1 and f.locator('#splash').inner_text().startswith('말하기 짝꿍'))
+    wait_js(f, "document.querySelector('.splash-tile img').complete")
+    check('시작 화면: 로고 그림이 열림', f.evaluate("document.querySelector('.splash-tile img').naturalWidth > 0"))
+    f.wait_for_timeout(900)
+    f.screenshot(path=f'{SHOTS}/00-splash.png')
+    tilt = f.evaluate("getComputedStyle(document.querySelector('.splash-tile')).transform")
+    check('시작 화면: 로고 판이 입체적으로 움직임', tilt not in ('none', ''), tilt)
+    expect(f.locator('#splash')).to_have_count(0, timeout=4000)
+    check('약 2초 뒤 본 화면으로', f.get_by_role('heading', name='말하기 짝꿍').is_visible())
+    f.reload()
+    expect(f.locator('#splash')).to_be_visible()
+    f.locator('#splash').click()
+    expect(f.locator('#splash')).to_have_count(0, timeout=1500)
+    check('시작 화면을 누르면 바로 넘어감', True)
+
+    # ── 안드로이드 앱(웹뷰) 안에서 ──
+    print('안드로이드 앱 안')
+    ctx6, g = new_page(browser, android_app=True)
+    g.goto(BASE + '/')
+    click(g, '처음이에요')
+    click(g, '다음')
+    click(g, re.compile('시작하기$'))
+    expect(g.get_by_role('heading', name='목소리와 빠르기')).to_be_visible()
+    expect(g.get_by_role('button', name='목소리 1 · 휴대폰 목소리')).to_be_visible()
+    expect(g.get_by_role('button', name='목소리 2 · 인터넷 목소리')).to_be_visible()
+    click(g, '들어 보기')
+    wait_js(g, 'window.__bridge.spoken.length >= 1')
+    sp = g.evaluate('window.__bridge.spoken.at(-1)')
+    check('앱: 휴대폰 음성으로 들려줌 (목소리·빠르기 전달)', sp['text'] == '사과, 할머니, 물 좀 주세요.' and sp['voice'] == 'ko-kr-x-ism-local' and sp['rate'] == 1, json.dumps(sp, ensure_ascii=False))
+    click(g, '다음')
+    if g.get_by_role('heading', name='복구 코드를 적어 두세요').count():
+        g.locator('#wrote').check(); click(g, '시작하기')
+    expect(g.get_by_role('heading', name='오늘의 연습')).to_be_visible()
+    click(g, '시작하기')
+    wait_js(g, '/1번/.test(document.querySelector(".count").textContent)')
+    click(g, '천천히 듣기')
+    wait_js(g, '/2번/.test(document.querySelector(".count").textContent)')
+    try:
+        wait_js(g, 'window.__bridge.spoken.at(-1).rate === 0.75', 3000); ok_slow = True
+    except AssertionError:
+        ok_slow = False
+    check('앱: 천천히 듣기는 0.75배속', ok_slow, str(g.evaluate('window.__bridge.spoken.map(x => x.rate)')))
+    g.get_by_role('button', name='전체화면').click()
+    check('앱: 전체화면은 앱 기능으로', g.evaluate('window.__bridge.full') is True and g.get_by_role('button', name='전체화면 끄기').count() == 1)
+    g.get_by_role('button', name='전체화면 끄기').click()
+    click(g, '‹ 그만하기')
+    g.get_by_role('button', name='설정').last.click()
+    expect(g.get_by_role('heading', name='설정')).to_be_visible()
+    check('앱: 홈 화면 추가·앱 설치 안내 숨김', g.get_by_role('button', name=re.compile('홈 화면에 추가|안드로이드 앱')).count() == 0)
+    click(g, re.compile('기록 (저장·불러오기|백업)'))
+    click(g, '기록 파일 내려받기')
+    expect(g.locator('#toast')).to_have_text('휴대폰의 다운로드 폴더에 기록 파일을 저장했어요.')
+    saved = g.evaluate('window.__bridge.saved')
+    check('앱: 기록 파일을 다운로드 폴더로', len(saved) == 1 and saved[0]['name'].endswith('.json') and saved[0]['size'] > 100, json.dumps(saved, ensure_ascii=False))
+
     # ── 공통 확인 ──
-    pages = [a, b, c, e]
+    pages = [a, b, c, e, f, g]
     errs = [x for pg in pages for x in pg.errors if 'ERR_INTERNET_DISCONNECTED' not in x]  # 오프라인 시험 중 백업 확인 실패는 정상
     check('콘솔 오류 없음', not errs, ' | '.join(errs[:5]))
     ext = sorted({u for pg in pages for u in pg.requests if not u.startswith(('http://localhost', 'blob:', 'data:'))})

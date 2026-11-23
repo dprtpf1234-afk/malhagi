@@ -1,6 +1,7 @@
-// 말하기 짝꿍 안드로이드 앱 (Trusted Web Activity)
-// 앱은 https://malhagi-one.vercel.app 을 Chrome 엔진으로 주소창 없이 엽니다.
-// 웹앱을 고치면 앱에도 그대로 반영되므로, 이 프로젝트는 주소·이름·아이콘을 바꿀 때만 고치면 됩니다.
+// 말하기 짝꿍 안드로이드 앱 (웹뷰 + 휴대폰 음성 기능 연결)
+// 앱은 https://malhagi-one.vercel.app 을 앱 안의 화면(웹뷰)으로 엽니다.
+// 웹뷰에는 브라우저의 '소리 내어 읽기'가 없어서, 휴대폰의 음성 기능(TextToSpeech)을 앱이 직접 연결해 줍니다.
+// 웹앱을 고치면 앱에도 그대로 반영되므로, 이 프로젝트는 이름·아이콘·주소를 바꿀 때만 고치면 됩니다.
 plugins {
     id 'com.android.application'
 }
@@ -11,10 +12,10 @@ android {
 
     defaultConfig {
         applicationId 'kr.malhagi.jjakkung'
-        minSdk 21
+        minSdk 24
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('VERSION_CODE') ?: '1')
-        versionName '3.1.0'
+        versionName '3.2.0'
     }
 
     buildTypes {
@@ -32,8 +33,4 @@ android {
         checkReleaseBuilds false
         abortOnError false
     }
-}
-
-dependencies {
-    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
 }
